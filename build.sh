@@ -23,6 +23,8 @@
 #                                    #    is the mode build.ps1 uses on Windows)
 #   ./build.sh --rebuild-strongswan  # force a fresh strongSwan build from source
 #   ./build.sh -v 6.0.7              # pin the strongSwan source version to build
+#   ./build.sh clean                   # remove downloaded/built strongSwan artifacts
+#   ./build.sh --clean                 # same as clean
 #
 set -euo pipefail
 
@@ -33,12 +35,14 @@ cd "$ROOT"
 VERSION="latest"
 SPK_ONLY=false
 REBUILD_SS=false
+CLEAN_SS=false
 while [ $# -gt 0 ]; do
 	case "$1" in
 	-v | --version) VERSION="$2"; shift 2 ;;
 	-v=* | --version=*) VERSION="${1#*=}"; shift ;;
 	--spk-only) SPK_ONLY=true; shift ;;
 	--rebuild-strongswan) REBUILD_SS=true; shift ;;
+	clean | --clean) CLEAN_SS=true; shift ;;
 	-h | --help)
 		grep -E '^#( |$)' "$0" | sed -e 's/^#//' -e 's/^ //'
 		exit 0 ;;
@@ -74,7 +78,14 @@ require_tool() { command -v "$1" >/dev/null 2>&1 || die "Required tool not found
 have_prebuilt() {
 	[ -f "$SS_CHARON" ] && [ -f "$SS_SWANCTL" ] && ls "$SS_CONFDIR"/*.conf >/dev/null 2>&1
 }
-
+# remove only artifacts created while obtaining/building bundled strongSwan
+clean_strongswan() {
+	log "Removing downloaded and built strongSwan artifacts"
+	rm -rf "$SS_DIR" "$SS_STAGE" "$ROOT/build/strongswan-src.tar.bz2"
+	if [ -d "$ROOT/build" ]; then
+		find "$ROOT/build" -mindepth 1 -maxdepth 1 -type d -name 'strongswan-*' -exec rm -rf {} +
+	fi
+}
 # --------------------------------------------------- stage 1: strongSwan
 build_strongswan() {
 	$SPK_ONLY && die "No prebuilt strongSwan available and --spk-only was given. Build strongSwan first on Linux with: ./build.sh"
@@ -277,5 +288,10 @@ build_spk() {
 }
 
 # -------------------------------------------------------------------- main
+if $CLEAN_SS; then
+	clean_strongswan
+	exit 0
+fi
+
 ensure_strongswan
 build_spk
