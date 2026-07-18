@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env bash
+#!/usr/bin/env bash
 #
 # Unified build script for the IKEv2VPN Synology package (.spk).
 #
