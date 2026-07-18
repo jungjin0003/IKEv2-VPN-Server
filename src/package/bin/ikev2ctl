@@ -1,0 +1,1012 @@
+#!/bin/sh
+# ikev2ctl - IKEv2 VPN Server control helper
+#
+# Needs root. On DSM 7.2 the package runs as the package user, so this
+# tool is normally invoked through bin/asroot, which uses the sudo rule
+# installed by 'ikev2-setup install'.
+#
+# Runs its OWN bundled strongSwan charon daemon (target/strongswan/) and
+# controls it via swanctl/vici - it does NOT depend on, or inject into,
+# Synology VPN Server (VPNCenter). VPNCenter's own L2TP/IPSec, if enabled,
+# also wants UDP 500/4500 - only one of the two can own those ports at a
+# time (see README).
+#
+# Supported auth methods (run simultaneously, each its own swanctl conn):
+#   - ikev2        : EAP-MSCHAPv2 (package accounts, or DSM accounts via
+#                    their NT hashes read from synosmbpasswd.conf)
+#   - ikev2-psk    : pre-shared key
+#   - ikev2-rsa    : client certificate (pubkey), issued by package CA
+#   - ikev2-eaptls : EAP-TLS client certificate
+#
+# usage: ikev2ctl apply|remove|reload|status|clients
+#        ikev2ctl disconnect <conn>|log-dump
+#        ikev2ctl cert-issue <name> <p12pass> <outfile>
+#        ikev2ctl cert-list | cert-del <name>
+
+PKG="IKEv2VPN"
+PKG_DIR="/var/packages/${PKG}"
+TARGET="${PKG_DIR}/target"
+ETC="${PKG_DIR}/etc"
+VAR="${PKG_DIR}/var"
+LOG="${VAR}/ikev2.log"
+
+SETTINGS="${ETC}/settings.conf"
+USERS="${ETC}/users.conf"
+
+# DSM-account EAP-MSCHAPv2: DSM keeps every local account's NT hash
+# (MD4 of the password) in this DSM-native file, one "USERNAME=NThash"
+# line per account under a [smbpasswd] section. strongSwan's swanctl.conf
+# 'ntlm' secret type takes that NT hash directly, so DSM accounts can log
+# in over IKEv2/EAP-MSCHAPv2 using their existing DSM password.
+SYNOSMB_CONF="/usr/syno/etc/synosmbpasswd.conf"
+SYNOUSER_BIN="/usr/syno/sbin/synouser"
+# NT hash of an empty password - accounts left at this value have no
+# password set (e.g. DSM's disabled default admin); never register them.
+EMPTY_NT_HASH="31D6CFE0D16AE931B73C59D7E0C089C0"
+CERT_DIR="${ETC}/cert"
+CLIENTCA_DIR="${ETC}/clientca"
+ISSUED_DIR="${CLIENTCA_DIR}/issued"
+
+STRONGSWAN_DIR="${TARGET}/strongswan"
+CHARON_BIN="${STRONGSWAN_DIR}/libexec/ipsec/charon"
+SWANCTL_BIN="${STRONGSWAN_DIR}/sbin/swanctl"
+STRONGSWAN_D="${STRONGSWAN_DIR}/strongswan.d"
+
+STRONGSWAN_CONF_OUT="${ETC}/strongswan.conf"
+SWANCTL_ETC="${ETC}/swanctl"
+SWANCTL_CONF_OUT="${SWANCTL_ETC}/swanctl.conf"
+CHARON_LOG="${VAR}/charon.log"
+CHARON_PID="${VAR}/charon.pid"
+CHARON_VICI="${VAR}/charon.vici"
+
+SYNO_CERT_DIR="/usr/syno/etc/certificate/system/default"
+# must match conf/privilege "username" - DSM's package user for this pkg
+PKG_USER_DEFAULT="sc-ikev2vpn"
+
+log() {
+    mkdir -p "$VAR"
+    echo "$(date '+%Y-%m-%d %H:%M:%S') $*" >> "$LOG"
+}
+
+fail() {
+    log "ERROR: $*"
+    echo "ERROR: $*" >&2
+    exit 1
+}
+
+# give package-user ownership to files the unprivileged side must read or
+# preserve across upgrades (we usually run as root via sudo)
+own_pkg() {
+    [ "$(id -u)" = "0" ] || return 0
+    O=$(stat -c '%U' "$TARGET" 2>/dev/null)
+    [ -n "$O" ] && [ "$O" != "root" ] || O="$PKG_USER_DEFAULT"
+    chown -R "$O" "$@" 2>/dev/null
+}
+
+# --------------------------------------------------------- kernel modules
+#
+# We run charon standalone (no VPN Server/VPNCenter), so nothing else has
+# loaded the kernel's IPsec (XFRM) and netfilter/NAT modules for us. On
+# this DSM/Xpenology kernel, charon installing an ESP SA into an
+# uninitialised XFRM stack takes the whole box down - so these MUST be
+# loaded (in dependency order) before charon starts and before we add NAT
+# rules. Prefer the system copies under /lib/modules (always match the
+# running kernel); fall back to the arch-specific set bundled in the
+# package only if a module is missing from the system.
+#
+# IPsec datapath, then netfilter/NAT - order matters (deps first).
+IPSEC_MODS="xfrm_algo xfrm_user af_key ah4 esp4 tunnel4 xfrm4_tunnel xfrm4_mode_tunnel xfrm4_mode_transport"
+NAT_MODS="x_tables ip_tables nf_conntrack nf_defrag_ipv4 nf_conntrack_ipv4 iptable_filter nf_nat nf_nat_ipv4 iptable_nat nf_nat_masquerade_ipv4 ipt_MASQUERADE"
+
+# Load one module by name from the running DSM firmware's own module set.
+# Already-loaded or absent-everywhere modules are non-fatal (some kernels
+# fold functionality into others or built it in).
+load_one_mod() {
+    _m="$1"
+    # already loaded?
+    grep -q "^${_m} " /proc/modules 2>/dev/null && return 0
+    # prefer modprobe (resolves dependencies) when available
+    if command -v modprobe >/dev/null 2>&1; then
+        modprobe "$_m" 2>/dev/null && return 0
+    fi
+    for _f in "/lib/modules/${_m}.ko" "/usr/lib/modules/${_m}.ko"; do
+        if [ -f "$_f" ]; then
+            insmod "$_f" 2>/dev/null && return 0
+        fi
+    done
+    return 1
+}
+
+load_kernel_modules() {
+    [ "$(id -u)" = "0" ] || return 0
+    for _m in $IPSEC_MODS $NAT_MODS; do
+        load_one_mod "$_m" || true
+    done
+    # esp4 is the one that actually matters for the tunnel - warn if absent
+    if ! grep -q "^esp4 " /proc/modules 2>/dev/null \
+       && ! grep -q "^esp " /proc/modules 2>/dev/null; then
+        log "WARN: esp4 kernel module not loaded - IPsec tunnels may fail"
+    fi
+}
+
+# ------------------------------------------------------------------ daemon
+
+swanctl() {
+    # swanctl also loads the main strongswan.conf (e.g. for the vici socket
+    # path) - without STRONGSWAN_CONF it falls back to the path baked in at
+    # ./configure time on the machine that built the binary, which doesn't
+    # exist here, and it aborts ("no files found matching ... abort
+    # initialization due to invalid configuration").
+    STRONGSWAN_CONF="$STRONGSWAN_CONF_OUT" SWANCTL_DIR="$SWANCTL_ETC" "$SWANCTL_BIN" "$@"
+}
+
+# pids of every running instance of OUR bundled charon (matched by exe
+# path so we never touch a charon belonging to some other package, and
+# never miss one just because the pidfile is stale/missing). Prints
+# newline-separated pids, empty if none.
+#
+# NB: /var/packages/<pkg>/target is a symlink to /volume1/@appstore/<pkg>,
+# so /proc/<pid>/exe always resolves to the @appstore real path, never the
+# symlinked $CHARON_BIN. Compare against the fully-resolved path.
+our_charon_pids() {
+    REAL_CHARON=$(readlink -f "$CHARON_BIN" 2>/dev/null)
+    [ -n "$REAL_CHARON" ] || REAL_CHARON="$CHARON_BIN"
+    RESULT=""
+    for pd in /proc/[0-9]*; do
+        pid=${pd#/proc/}
+        exe=$(readlink "${pd}/exe" 2>/dev/null)
+        # /proc/<pid>/exe of a deleted/replaced binary may have a
+        # " (deleted)" suffix - strip it before comparing
+        exe=${exe% (deleted)}
+        [ "$exe" = "$REAL_CHARON" ] && RESULT="${RESULT}${pid}
+"
+    done
+    printf '%s' "$RESULT" | grep -v '^$'
+}
+
+charon_running() {
+    [ -n "$(our_charon_pids)" ]
+}
+
+# terminate EVERY running instance of our charon (not just the pidfile
+# one). Idempotent, and the primary guard against stacking duplicate
+# daemons - which previously could exhaust memory and take the NAS down.
+stop_charon() {
+    PIDS=$(our_charon_pids)
+    if [ -n "$PIDS" ]; then
+        for p in $PIDS; do kill "$p" 2>/dev/null; done
+        I=0
+        while [ -n "$(our_charon_pids)" ] && [ $I -lt 6 ]; do sleep 1; I=$((I + 1)); done
+        for p in $(our_charon_pids); do kill -9 "$p" 2>/dev/null; done
+    fi
+    rm -f "$CHARON_PID" "$CHARON_VICI"
+    [ -n "$PIDS" ] && log "charon stopped (pids: $(echo $PIDS | tr '\n' ' '))"
+    return 0
+}
+
+start_charon() {
+    [ -x "$CHARON_BIN" ] || fail "bundled charon binary not found (${CHARON_BIN})"
+    # ALWAYS clear any existing instance first so we can never end up with
+    # two charons fighting over UDP 500/4500 (the losing one fails to bind
+    # but lingers, and repeated applies pile them up).
+    stop_charon
+    mkdir -p "$VAR"
+    rm -f "$CHARON_VICI"
+    STRONGSWAN_CONF="$STRONGSWAN_CONF_OUT" SWANCTL_DIR="$SWANCTL_ETC" \
+        nohup "$CHARON_BIN" >> "${VAR}/charon.stdout.log" 2>&1 &
+    echo $! > "$CHARON_PID"
+    # wait briefly for the vici socket to appear (whole-second sleep only -
+    # busybox sh on some DSM builds lacks fractional sleep support)
+    I=0
+    while [ ! -S "$CHARON_VICI" ] && [ $I -lt 8 ]; do sleep 1; I=$((I + 1)); done
+    if [ ! -S "$CHARON_VICI" ]; then
+        log "WARN: charon started (pid $(cat "$CHARON_PID" 2>/dev/null)) but vici socket did not appear within 8s"
+    else
+        log "charon started (pid $(cat "$CHARON_PID" 2>/dev/null))"
+    fi
+}
+
+# ------------------------------------------------------------------ settings
+
+load_settings() {
+    # defaults - each auth method gets its own client IP pool/DNS so the 4
+    # conns can be routed/firewalled independently
+    IKEV2_HOSTNAME=""
+    IKEV2_ENC="auto"              # auto | aes256 | aes128
+    IKEV2_AUTOBLOCK="no"
+    IKEV2_IFACE=""                # "" = listen on all interfaces; else iface name
+
+    IKEV2_ENABLE_MSCHAPV2="no"
+    IKEV2_MSCHAPV2_AUTH="local"   # local | dsm (active DSM accounts)
+    IKEV2_SUBNET_MSCHAPV2="10.10.0.0/24"
+    IKEV2_DNS_MSCHAPV2="8.8.8.8"
+
+    IKEV2_ENABLE_PSK="no"
+    IKEV2_PSK=""
+    IKEV2_SUBNET_PSK="10.11.0.0/24"
+    IKEV2_DNS_PSK="8.8.8.8"
+
+    IKEV2_ENABLE_RSA="no"
+    IKEV2_SUBNET_RSA="10.12.0.0/24"
+    IKEV2_DNS_RSA="8.8.8.8"
+
+    IKEV2_ENABLE_EAPTLS="no"
+    IKEV2_SUBNET_EAPTLS="10.13.0.0/24"
+    IKEV2_DNS_EAPTLS="8.8.8.8"
+
+    [ -f "$SETTINGS" ] && . "$SETTINGS"
+}
+
+cert_cn() {
+    openssl x509 -in "$1" -noout -subject 2>/dev/null \
+        | sed -n 's/.*CN[ ]*=[ ]*\([^,/]*\).*/\1/p' | head -n 1
+}
+
+get_leftid() {
+    LEFTID="$IKEV2_HOSTNAME"
+    [ -n "$LEFTID" ] || LEFTID=$(cert_cn "${CERT_DIR}/server-cert.pem")
+    [ -n "$LEFTID" ] || LEFTID=$(hostname)
+}
+
+# ----------------------------------------------------------------- server cert
+
+install_cert() {
+    [ -f "${SYNO_CERT_DIR}/cert.pem" ]    || fail "system default certificate not found (${SYNO_CERT_DIR})"
+    [ -f "${SYNO_CERT_DIR}/privkey.pem" ] || fail "system default private key not found"
+
+    mkdir -p "$CERT_DIR"
+    cp -f "${SYNO_CERT_DIR}/cert.pem"    "${CERT_DIR}/server-cert.pem"
+    cp -f "${SYNO_CERT_DIR}/privkey.pem" "${CERT_DIR}/server-key.pem"
+    chmod 600 "${CERT_DIR}/server-key.pem"
+
+    # intermediate / root chain (if any)
+    rm -f "${CERT_DIR}/ca.pem"
+    if [ -s "${SYNO_CERT_DIR}/chain.pem" ]; then
+        cp -f "${SYNO_CERT_DIR}/chain.pem" "${CERT_DIR}/ca.pem"
+    elif [ -s "${SYNO_CERT_DIR}/fullchain.pem" ]; then
+        awk 'BEGIN{n=0} /BEGIN CERTIFICATE/{n++} n>=2{print}' \
+            "${SYNO_CERT_DIR}/fullchain.pem" > "${CERT_DIR}/ca.pem"
+        [ -s "${CERT_DIR}/ca.pem" ] || rm -f "${CERT_DIR}/ca.pem"
+    fi
+
+    # self-signed cert: it is its own CA (clients must trust it)
+    SUBJ_HASH=$(openssl x509 -in "${CERT_DIR}/server-cert.pem" -noout -subject_hash 2>/dev/null)
+    ISSU_HASH=$(openssl x509 -in "${CERT_DIR}/server-cert.pem" -noout -issuer_hash 2>/dev/null)
+    if [ -n "$SUBJ_HASH" ] && [ "$SUBJ_HASH" = "$ISSU_HASH" ]; then
+        cp -f "${CERT_DIR}/server-cert.pem" "${CERT_DIR}/ca.pem"
+        echo "yes" > "${CERT_DIR}/self-signed"
+    else
+        rm -f "${CERT_DIR}/self-signed"
+    fi
+
+    # swanctl's cert-loading convention: end-entity cert under x509/,
+    # private key under private/, CA certs (server chain + client CA)
+    # under x509ca/
+    mkdir -p "${SWANCTL_ETC}/x509" "${SWANCTL_ETC}/private" "${SWANCTL_ETC}/x509ca"
+    cp -f "${CERT_DIR}/server-cert.pem" "${SWANCTL_ETC}/x509/server-cert.pem"
+    cp -f "${CERT_DIR}/server-key.pem"  "${SWANCTL_ETC}/private/server-key.pem"
+    chmod 600 "${SWANCTL_ETC}/private/server-key.pem"
+    if [ -f "${CERT_DIR}/ca.pem" ]; then
+        cp -f "${CERT_DIR}/ca.pem" "${SWANCTL_ETC}/x509ca/server-chain-ca.pem"
+    else
+        rm -f "${SWANCTL_ETC}/x509ca/server-chain-ca.pem" 2>/dev/null
+    fi
+    if [ "$IKEV2_ENABLE_RSA" = "yes" ] || [ "$IKEV2_ENABLE_EAPTLS" = "yes" ]; then
+        ensure_client_ca
+        cp -f "${CLIENTCA_DIR}/ca.pem" "${SWANCTL_ETC}/x509ca/clientca.pem"
+    else
+        rm -f "${SWANCTL_ETC}/x509ca/clientca.pem" 2>/dev/null
+    fi
+}
+
+# --------------------------------------------------------------- client CA
+
+ensure_client_ca() {
+    [ -f "${CLIENTCA_DIR}/ca.pem" ] && [ -f "${CLIENTCA_DIR}/ca.key" ] && return 0
+    mkdir -p "$ISSUED_DIR"
+    umask 077
+    openssl req -x509 -new -nodes -newkey rsa:2048 -sha256 \
+        -keyout "${CLIENTCA_DIR}/ca.key" -out "${CLIENTCA_DIR}/ca.pem" \
+        -days 3650 -subj "/CN=IKEv2VPN Client CA" >/dev/null 2>&1 \
+        || fail "client CA generation failed"
+    own_pkg "$CLIENTCA_DIR"
+    log "client CA generated"
+}
+
+cert_issue() {
+    NAME="$1"; P12PASS="$2"; OUTFILE="$3"
+    printf '%s' "$NAME" | grep -Eq '^[A-Za-z0-9._-]{1,32}$' || fail "invalid cert name"
+    [ -n "$P12PASS" ] || fail "empty p12 password"
+    [ -n "$OUTFILE" ] || fail "no output file"
+
+    ensure_client_ca
+    TMP="${VAR}/certtmp.$$"
+    mkdir -p "$TMP"
+    umask 077
+
+    openssl req -new -nodes -newkey rsa:2048 -sha256 \
+        -keyout "${TMP}/key.pem" -out "${TMP}/csr.pem" \
+        -subj "/CN=${NAME}" >/dev/null 2>&1 || { rm -rf "$TMP"; fail "csr failed"; }
+
+    printf 'extendedKeyUsage=clientAuth\nkeyUsage=digitalSignature\nsubjectAltName=DNS:%s\n' "$NAME" \
+        > "${TMP}/ext.cnf"
+
+    openssl x509 -req -in "${TMP}/csr.pem" -sha256 \
+        -CA "${CLIENTCA_DIR}/ca.pem" -CAkey "${CLIENTCA_DIR}/ca.key" \
+        -CAcreateserial -days 1095 -extfile "${TMP}/ext.cnf" \
+        -out "${TMP}/cert.pem" >/dev/null 2>&1 || { rm -rf "$TMP"; fail "signing failed"; }
+
+    openssl pkcs12 -export \
+        -inkey "${TMP}/key.pem" -in "${TMP}/cert.pem" \
+        -certfile "${CLIENTCA_DIR}/ca.pem" \
+        -name "IKEv2 VPN (${NAME})" \
+        -passout "pass:${P12PASS}" -out "$OUTFILE" >/dev/null 2>&1 \
+        || { rm -rf "$TMP"; fail "p12 export failed"; }
+
+    mkdir -p "$ISSUED_DIR"
+    cp -f "${TMP}/cert.pem" "${ISSUED_DIR}/${NAME}.pem"
+    rm -rf "$TMP"
+    own_pkg "$CLIENTCA_DIR"
+
+    # when called through sudo, let the calling (package) user read the p12
+    if [ -n "$SUDO_UID" ]; then
+        chown "${SUDO_UID}:${SUDO_GID:-$SUDO_UID}" "$OUTFILE" 2>/dev/null
+    fi
+    log "client certificate issued: ${NAME}"
+}
+
+cert_list() {
+    [ -d "$ISSUED_DIR" ] || return 0
+    for f in "$ISSUED_DIR"/*.pem; do
+        [ -f "$f" ] || continue
+        N=$(basename "$f" .pem)
+        EXP=$(openssl x509 -in "$f" -noout -enddate 2>/dev/null | cut -d= -f2)
+        echo "${N}|${EXP}"
+    done
+}
+
+cert_del() {
+    printf '%s' "$1" | grep -Eq '^[A-Za-z0-9._-]{1,32}$' || fail "invalid cert name"
+    rm -f "${ISSUED_DIR}/$1.pem"
+    log "client certificate record removed: $1 (note: not revoked - no CRL)"
+}
+
+# -------------------------------------------------------------------- render
+
+# cipher proposals for the current IKEV2_ENC setting.
+# - ecp* (EC curve DH groups) deliberately excluded: the bundled build was
+#   not compiled with --enable-ecp, so charon has no such group registered
+#   and rejects the whole proposal ("invalid value for: proposals") if one
+#   is listed - modp groups (via --enable-gmp, which is compiled in) only.
+# - 3des deliberately excluded too: obsolete, and would need a separate
+#   --enable-des plugin the bundled build doesn't have either. Every
+#   client we care about (Windows/iOS/macOS/Android/strongSwan) supports
+#   AES, so there is no real fallback need for it.
+cipher_ike() {
+    case "$IKEV2_ENC" in
+        aes256) echo "aes256-sha256-modp2048,aes256-sha1-modp2048" ;;
+        aes128) echo "aes128-sha256-modp2048,aes128-sha1-modp1024" ;;
+        *)      echo "aes256-sha256-modp2048,aes256-sha1-modp2048,aes256-sha1-modp1024,aes128-sha1-modp1024" ;;
+    esac
+}
+
+# ESP (child SA) proposals - deliberately AES-CBC + HMAC-SHA ONLY, no
+# AES-GCM/AEAD. On this DSM/Xpenology kernel, installing an AES-GCM ESP SA
+# into the XFRM stack takes the whole box down (the GCM/AEAD kernel crypto
+# path isn't set up), whereas AES-CBC SAs install fine - the one config
+# that reached the internet without crashing negotiated AES_CBC-256. Do
+# not add gcm here unless the target kernel is known to handle it.
+cipher_esp() {
+    case "$IKEV2_ENC" in
+        aes256) echo "aes256-sha256,aes256-sha1" ;;
+        aes128) echo "aes128-sha256,aes128-sha1" ;;
+        *)      echo "aes256-sha256,aes256-sha1,aes128-sha1" ;;
+    esac
+}
+
+# render ${ETC}/strongswan.conf - main daemon config, points at the
+# read-only per-plugin toggle files shipped in target/strongswan/strongswan.d
+render_strongswan_conf() {
+    mkdir -p "$ETC"
+    {
+        echo "charon {"
+        echo "    load_modular = no"
+        # This DSM/Xpenology kernel goes down if charon installs its own
+        # routes / virtual IPs into the (fragile) XFRM stack. We do the
+        # routing/NAT ourselves (nat_install), so tell charon not to.
+        echo "    install_routes = no"
+        echo "    install_virtual_ip = no"
+        echo "    filelog {"
+        echo "        charon {"
+        echo "            path = ${CHARON_LOG}"
+        echo "            time_format = %Y-%m-%d %H:%M:%S"
+        echo "            append = yes"
+        echo "            default = 1"
+        echo "            ike_name = yes"
+        echo "        }"
+        echo "    }"
+        echo "    plugins {"
+        echo "        include ${STRONGSWAN_D}/charon/*.conf"
+        echo "        kernel-netlink {"
+        echo "            install_routes = no"
+        echo "        }"
+        echo "        vici {"
+        echo "            load = yes"
+        echo "            socket = unix://${CHARON_VICI}"
+        echo "        }"
+        echo "    }"
+        echo "}"
+        # separate from charon.plugins.vici.socket (where charon listens) -
+        # this tells the swanctl CLI where to connect TO. Without it,
+        # swanctl falls back to its compiled-in default (unix:///var/run/
+        # charon.vici), which does not exist here, and every
+        # 'swanctl --load-all' silently fails - so connections never
+        # actually get loaded into charon.
+        echo "swanctl {"
+        echo "    socket = unix://${CHARON_VICI}"
+        echo "}"
+    } > "$STRONGSWAN_CONF_OUT"
+    chmod 600 "$STRONGSWAN_CONF_OUT"
+}
+
+# Emit swanctl 'ntlm' secret blocks for the active DSM accounts, read fresh
+# from synosmbpasswd.conf every time the config is rendered (i.e. every
+# service start / apply), so new accounts and password changes are picked up.
+#
+# synosmbpasswd.conf stores usernames upper-cased; the real DSM login name
+# (correct case, which is what the client sends as its EAP identity) comes
+# from /etc/passwd (uid >= 1024). We iterate the real accounts, look their
+# NT hash up by upper-cased name, and skip any account that has no hash, has
+# the empty-password hash, or is expired/disabled in DSM.
+dsm_ntlm_secrets() {
+    [ -r "$SYNOSMB_CONF" ] || { log "WARN: $SYNOSMB_CONF not readable - no DSM accounts registered"; return 0; }
+    awk -F: '$3>=1024 && $3<60000 {print $1}' /etc/passwd 2>/dev/null | while read -r U; do
+        [ -n "$U" ] || continue
+        UP=$(printf '%s' "$U" | tr '[:lower:]' '[:upper:]')
+        HASH=$(awk -F= -v u="$UP" '/^\[/{s=0} /^\[smbpasswd\]/{s=1} s && $1==u {print $2}' "$SYNOSMB_CONF")
+        [ -n "$HASH" ] || continue
+        HUP=$(printf '%s' "$HASH" | tr '[:lower:]' '[:upper:]')
+        [ "$HUP" = "$EMPTY_NT_HASH" ] && continue
+        if [ -x "$SYNOUSER_BIN" ]; then
+            "$SYNOUSER_BIN" --get "$U" 2>/dev/null | grep -qi 'Expired *: *\[true\]' && continue
+        fi
+        UESC=$(printf '%s' "$U" | sed 's/"/\\"/g')
+        printf '    ntlm-%s {\n        id = "%s"\n        secret = 0x%s\n    }\n' "$U" "$UESC" "$HUP"
+    done
+}
+
+# render ${ETC}/swanctl/swanctl.conf - connection/pool/secret definitions,
+# loaded live via 'swanctl --load-all' (no daemon restart needed)
+render_swanctl_conf() {
+    get_leftid
+    mkdir -p "$SWANCTL_ETC"
+
+    # local_addrs = concrete interface IP(s), never the literal %any (which
+    # this fragile kernel dislikes when combined with charon route/vip
+    # install). Default (IKEV2_IFACE="") binds every real IPv4 address so the
+    # server is reachable on all interfaces; a specific IKEV2_IFACE narrows it
+    # to that one. listen_addrs() falls back to %any only if nothing is found.
+    LOCAL_ADDR=$(listen_addrs)
+
+    CONNS=""
+    POOLS=""
+    SECRETS=""
+
+    if [ "$IKEV2_ENABLE_MSCHAPV2" = "yes" ]; then
+        # Both local and DSM accounts authenticate with EAP-MSCHAPv2; they
+        # differ only in where the credential comes from (package users.conf
+        # vs DSM NT hashes emitted as 'ntlm' secrets below).
+        RAUTH="eap-mschapv2"
+        CONNS="${CONNS}
+    ikev2 {
+        version = 2
+        local_addrs = ${LOCAL_ADDR}
+        remote_addrs = %any
+        proposals = $(cipher_ike)
+        fragmentation = yes
+        encap = yes
+        dpd_delay = 30s
+        pools = pool-ikev2
+        local {
+            auth = pubkey
+            certs = server-cert.pem
+            id = \"${LEFTID}\"
+        }
+        remote {
+            auth = ${RAUTH}
+            eap_id = %any
+        }
+        children {
+            ikev2 {
+                mode = tunnel
+                local_ts = 0.0.0.0/0
+                esp_proposals = $(cipher_esp)
+                rekey_time = 0
+            }
+        }
+    }"
+        POOLS="${POOLS}
+    pool-ikev2 { addrs = ${IKEV2_SUBNET_MSCHAPV2}, dns = ${IKEV2_DNS_MSCHAPV2} }"
+
+        if [ "$IKEV2_MSCHAPV2_AUTH" = "dsm" ]; then
+            SECRETS="${SECRETS}
+$(dsm_ntlm_secrets)"
+        elif [ -f "$USERS" ]; then
+            N=0
+            while IFS=: read -r U P64; do
+                [ -n "$U" ] || continue
+                P=$(echo "$P64" | openssl base64 -d -A 2>/dev/null)
+                [ -n "$P" ] || continue
+                N=$((N + 1))
+                UESC=$(printf '%s' "$U" | sed 's/"/\\"/g')
+                PESC=$(printf '%s' "$P" | sed 's/"/\\"/g')
+                SECRETS="${SECRETS}
+    eap-user-${N} {
+        id = \"${UESC}\"
+        secret = \"${PESC}\"
+    }"
+            done < "$USERS"
+        fi
+    fi
+
+    if [ "$IKEV2_ENABLE_PSK" = "yes" ] && [ -n "$IKEV2_PSK" ]; then
+        CONNS="${CONNS}
+    ikev2-psk {
+        version = 2
+        local_addrs = ${LOCAL_ADDR}
+        remote_addrs = %any
+        proposals = $(cipher_ike)
+        fragmentation = yes
+        encap = yes
+        dpd_delay = 30s
+        pools = pool-ikev2-psk
+        local {
+            auth = psk
+            id = \"${LEFTID}\"
+        }
+        remote {
+            auth = psk
+        }
+        children {
+            ikev2-psk {
+                mode = tunnel
+                local_ts = 0.0.0.0/0
+                esp_proposals = $(cipher_esp)
+                rekey_time = 0
+            }
+        }
+    }"
+        POOLS="${POOLS}
+    pool-ikev2-psk { addrs = ${IKEV2_SUBNET_PSK}, dns = ${IKEV2_DNS_PSK} }"
+        PSKESC=$(printf '%s' "$IKEV2_PSK" | sed 's/"/\\"/g')
+        SECRETS="${SECRETS}
+    ike-psk { secret = \"${PSKESC}\" }"
+    fi
+
+    if [ "$IKEV2_ENABLE_RSA" = "yes" ]; then
+        ensure_client_ca
+        CONNS="${CONNS}
+    ikev2-rsa {
+        version = 2
+        local_addrs = ${LOCAL_ADDR}
+        remote_addrs = %any
+        proposals = $(cipher_ike)
+        fragmentation = yes
+        encap = yes
+        dpd_delay = 30s
+        pools = pool-ikev2-rsa
+        local {
+            auth = pubkey
+            certs = server-cert.pem
+            id = \"${LEFTID}\"
+        }
+        remote {
+            auth = pubkey
+            cacerts = clientca.pem
+        }
+        children {
+            ikev2-rsa {
+                mode = tunnel
+                local_ts = 0.0.0.0/0
+                esp_proposals = $(cipher_esp)
+                rekey_time = 0
+            }
+        }
+    }"
+        POOLS="${POOLS}
+    pool-ikev2-rsa { addrs = ${IKEV2_SUBNET_RSA}, dns = ${IKEV2_DNS_RSA} }"
+    fi
+
+    if [ "$IKEV2_ENABLE_EAPTLS" = "yes" ]; then
+        ensure_client_ca
+        CONNS="${CONNS}
+    ikev2-eaptls {
+        version = 2
+        local_addrs = ${LOCAL_ADDR}
+        remote_addrs = %any
+        proposals = $(cipher_ike)
+        fragmentation = yes
+        encap = yes
+        dpd_delay = 30s
+        pools = pool-ikev2-eaptls
+        local {
+            auth = pubkey
+            certs = server-cert.pem
+            id = \"${LEFTID}\"
+        }
+        remote {
+            auth = eap-tls
+            eap_id = %any
+            cacerts = clientca.pem
+        }
+        children {
+            ikev2-eaptls {
+                mode = tunnel
+                local_ts = 0.0.0.0/0
+                esp_proposals = $(cipher_esp)
+                rekey_time = 0
+            }
+        }
+    }"
+        POOLS="${POOLS}
+    pool-ikev2-eaptls { addrs = ${IKEV2_SUBNET_EAPTLS}, dns = ${IKEV2_DNS_EAPTLS} }"
+    fi
+
+    umask 077
+    {
+        echo "connections {${CONNS}"
+        echo "}"
+        echo "pools {${POOLS}"
+        echo "}"
+        echo "secrets {"
+        echo "    private-server { file = server-key.pem }"
+        echo "${SECRETS}"
+        echo "}"
+    } > "$SWANCTL_CONF_OUT"
+    chmod 600 "$SWANCTL_CONF_OUT"
+}
+
+# --------------------------------------------------------- NAT / forwarding
+#
+# charon installs the IPsec SA, but the client's traffic still needs the
+# NAS to route+NAT it out to the internet. VPN Server/VPNCenter normally
+# sets this up; standalone we must. Rules are added on apply (when the
+# service starts) and removed on remove (when it stops), per user request.
+#
+# We put ALL our rules in dedicated custom chains (NAT_CHAIN / FWD_CHAIN)
+# and only jump into them from the built-in POSTROUTING/FORWARD. Teardown
+# then just deletes those two jumps and flushes/deletes our chains -
+# removing exactly our rules and nothing else. This also avoids `-m
+# comment` (xt_comment), which is NOT available on this DSM kernel.
+
+NAT_CHAIN="IKEV2VPN_MASQ"
+FWD_CHAIN="IKEV2VPN_FWD"
+
+# detected egress interface (the one with the default route to the internet)
+egress_iface() {
+    ip -4 route get 8.8.8.8 2>/dev/null | sed -n 's/.* dev \([^ ]*\).*/\1/p' | head -n 1
+}
+
+# list of client subnets for auth methods that are enabled (settings loaded)
+enabled_subnets() {
+    [ "$IKEV2_ENABLE_MSCHAPV2" = "yes" ] && echo "$IKEV2_SUBNET_MSCHAPV2"
+    [ "$IKEV2_ENABLE_PSK" = "yes" ]      && echo "$IKEV2_SUBNET_PSK"
+    [ "$IKEV2_ENABLE_RSA" = "yes" ]      && echo "$IKEV2_SUBNET_RSA"
+    [ "$IKEV2_ENABLE_EAPTLS" = "yes" ]   && echo "$IKEV2_SUBNET_EAPTLS"
+}
+
+nat_install() {
+    [ "$(id -u)" = "0" ] || return 0
+    command -v iptables >/dev/null 2>&1 || { log "WARN: iptables not found - client internet will not work"; return 0; }
+    IFACE=$(egress_iface)
+    [ -n "$IFACE" ] || { log "WARN: could not detect egress interface for NAT"; return 0; }
+
+    echo 1 > /proc/sys/net/ipv4/ip_forward 2>/dev/null
+
+    # start clean so re-apply never duplicates
+    nat_remove_quiet
+
+    # create our chains and hook them in
+    iptables -t nat -N "$NAT_CHAIN" 2>/dev/null
+    iptables -N "$FWD_CHAIN" 2>/dev/null
+    iptables -t nat -A POSTROUTING -j "$NAT_CHAIN" 2>/dev/null
+    iptables -A FORWARD -j "$FWD_CHAIN" 2>/dev/null
+
+    for net in $(enabled_subnets); do
+        [ -n "$net" ] || continue
+        iptables -t nat -A "$NAT_CHAIN" -s "$net" -o "$IFACE" -j MASQUERADE 2>/dev/null
+        iptables -A "$FWD_CHAIN" -s "$net" -j ACCEPT 2>/dev/null
+        iptables -A "$FWD_CHAIN" -d "$net" -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null
+    done
+    log "NAT/forwarding installed (egress ${IFACE})"
+}
+
+# remove the jumps, then flush+delete our chains. Silent/idempotent.
+nat_remove_quiet() {
+    [ "$(id -u)" = "0" ] || return 0
+    command -v iptables >/dev/null 2>&1 || return 0
+    # delete any jump(s) into our chains (loop in case of duplicates)
+    while iptables -t nat -C POSTROUTING -j "$NAT_CHAIN" 2>/dev/null; do
+        iptables -t nat -D POSTROUTING -j "$NAT_CHAIN" 2>/dev/null || break
+    done
+    while iptables -C FORWARD -j "$FWD_CHAIN" 2>/dev/null; do
+        iptables -D FORWARD -j "$FWD_CHAIN" 2>/dev/null || break
+    done
+    iptables -t nat -F "$NAT_CHAIN" 2>/dev/null
+    iptables -t nat -X "$NAT_CHAIN" 2>/dev/null
+    iptables -F "$FWD_CHAIN" 2>/dev/null
+    iptables -X "$FWD_CHAIN" 2>/dev/null
+}
+
+nat_remove() {
+    nat_remove_quiet
+    log "NAT/forwarding removed"
+}
+
+# ------------------------------------------------------------------- actions
+
+do_reload() {
+    # --load-all already loads pools/credentials/connections/authorities in
+    # the right order - no need to also call --load-creds separately.
+    charon_running || { start_charon; return 0; }
+    OUT=$(swanctl --load-all 2>&1) || { log "WARN: swanctl --load-all failed: $(printf '%s' "$OUT" | tail -n 3)"; return 1; }
+    log "swanctl --load-all applied"
+}
+
+# structured connection list: "conn|peer_ip|virtual_ip|state" per line,
+# via 'swanctl --list-sas' (vici) - much more reliable than text-scraping
+# the legacy 'ipsec status' output. Parses the documented human-readable
+# format (conn name/#id/ESTABLISHED header line, indented "remote '<id>'
+# @ <ip>[port]" line, indented child-SA "remote <cidr>" traffic-selector
+# line) - not verified against a live established session.
+list_connections() {
+    charon_running || return 0
+    swanctl --list-sas 2>/dev/null | awk '
+    /^[A-Za-z0-9_-]+: #[0-9]+, ESTABLISHED/ {
+        name = $1; sub(/:$/, "", name)
+        active = 1; peer = "-"; vip = "-"
+        next
+    }
+    active && /^  remote / {
+        if (match($0, /@ [0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/)) {
+            s = substr($0, RSTART, RLENGTH); sub(/^@ /, "", s); peer = s
+        }
+        next
+    }
+    active && /^    remote [0-9]/ {
+        if (match($0, /[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/)) vip = substr($0, RSTART, RLENGTH)
+        print name "|" peer "|" vip "|established"
+        active = 0
+    }'
+}
+
+# terminate one connection by its swanctl conn name (ikev2, ikev2-psk,
+# ikev2-rsa or ikev2-eaptls) - drops all active sessions on that conn
+disconnect_conn() {
+    NAME="$1"
+    case "$NAME" in
+        ikev2|ikev2-psk|ikev2-rsa|ikev2-eaptls) ;;
+        *) fail "invalid connection name" ;;
+    esac
+    charon_running || fail "charon not running"
+    swanctl --terminate --ike "$NAME" >/dev/null 2>&1
+    log "disconnected all sessions on ${NAME}"
+}
+
+do_apply() {
+    load_settings
+    mkdir -p "$SWANCTL_ETC"
+
+    # standalone charon needs the IPsec + netfilter kernel modules loaded
+    # before it installs any SA (otherwise this kernel crashes) and before
+    # NAT rules can be added.
+    load_kernel_modules
+
+    install_cert
+
+    # strongswan.conf is only read at charon startup, so if it changed we
+    # must restart charon (not just hot-reload swanctl). swanctl.conf, by
+    # contrast, is applied live via 'swanctl --load-all'.
+    SS_MD5_OLD=$(md5sum "$STRONGSWAN_CONF_OUT" 2>/dev/null | cut -d' ' -f1)
+    render_strongswan_conf
+    SS_MD5_NEW=$(md5sum "$STRONGSWAN_CONF_OUT" 2>/dev/null | cut -d' ' -f1)
+    render_swanctl_conf
+    own_pkg "$ETC"
+
+    touch "${ETC}/enabled"
+    chmod 644 "${ETC}/enabled" 2>/dev/null
+    own_pkg "${ETC}/enabled"
+
+    # log watcher: always runs (structured events for the UI's 로그 page);
+    # DSM auto-block registration inside it is separately gated on
+    # IKEV2_AUTOBLOCK
+    "${TARGET}/bin/ikev2watch" start
+
+    # start_charon() always stops any existing instance first, so it is the
+    # safe path whenever a (re)start is actually needed. Only hot-reload
+    # when charon is already up AND its startup config is unchanged.
+    if charon_running && [ "$SS_MD5_OLD" = "$SS_MD5_NEW" ]; then
+        do_reload
+    else
+        start_charon
+        do_reload
+    fi
+
+    # NAT/forwarding so clients reach the internet - added on start,
+    # removed on stop (do_remove).
+    nat_install
+
+    date '+%Y-%m-%d %H:%M:%S' > "${ETC}/last_applied"
+    own_pkg "${ETC}/last_applied"
+
+    log "IKEv2 configuration applied (mschapv2=${IKEV2_ENABLE_MSCHAPV2}/${IKEV2_MSCHAPV2_AUTH} psk=${IKEV2_ENABLE_PSK} rsa=${IKEV2_ENABLE_RSA} eaptls=${IKEV2_ENABLE_EAPTLS} autoblock=${IKEV2_AUTOBLOCK})"
+}
+
+do_remove() {
+    load_settings
+    stop_charon
+    # tear down the iptables rules we added on start (user requirement:
+    # MASQUERADE added when the service runs, removed when it stops).
+    nat_remove
+    # note: the ${ETC}/enabled flag is kept on purpose - it records the
+    # user's intent so start-stop-status can re-apply after a reboot.
+    # The management UI's disable action removes it.
+    "${TARGET}/bin/ikev2watch" stop >/dev/null 2>&1
+    log "IKEv2 daemon stopped"
+}
+
+# detected default-route interface name + its IP (informational: shown in the
+# UI as the internet-egress interface used for NAT)
+detect_iface() {
+    ip -4 route get 1.1.1.1 2>/dev/null \
+        | sed -n 's/.* dev \([^ ]*\).*src \([^ ]*\).*/\1 \2/p' | head -n 1
+}
+
+# real (non-loopback) global-scope IPv4 interfaces, one "name ip" per line.
+list_ifaces() {
+    ip -o -4 addr show scope global 2>/dev/null \
+        | awk '{ split($4, a, "/"); if ($2 != "lo") print $2, a[1] }'
+}
+
+# the swanctl.conf 'local_addrs' value, honoring the IKEV2_IFACE setting:
+#   ""        -> ALL real IPv4 addresses, comma-joined (listen everywhere).
+#                On a single-NIC box this is just that one LAN IP - i.e. a
+#                concrete pinned address, NOT the literal %any (which this
+#                fragile kernel dislikes). %any is only a last-resort fallback.
+#   <ifname>  -> only that interface's IPv4 address(es).
+listen_addrs() {
+    _sel="$IKEV2_IFACE"
+    if [ -n "$_sel" ]; then
+        _a=$(ip -o -4 addr show dev "$_sel" scope global 2>/dev/null \
+             | awk '{ split($4,x,"/"); printf "%s%s", (n++?",":""), x[1] }')
+        [ -n "$_a" ] && { echo "$_a"; return; }
+        # selected interface currently has no IPv4 - fall through to "all"
+    fi
+    _all=$(list_ifaces | awk '{ printf "%s%s", (n++?",":""), $2 }')
+    [ -n "$_all" ] && { echo "$_all"; return; }
+    echo "%any"
+}
+
+do_status() {
+    load_settings
+
+    [ -f "${ETC}/enabled" ] && echo "enabled=yes" || echo "enabled=no"
+    if charon_running; then
+        echo "charon=yes"
+        echo "ike_daemon=charon"
+    else
+        echo "charon=no"
+        echo "ike_daemon=none"
+    fi
+
+    if [ -f "${CERT_DIR}/server-cert.pem" ]; then
+        echo "cert_cn=$(cert_cn "${CERT_DIR}/server-cert.pem")"
+        [ -f "${CERT_DIR}/self-signed" ] && echo "cert_self_signed=yes" || echo "cert_self_signed=no"
+    fi
+    if [ -f "${CLIENTCA_DIR}/ca.pem" ]; then
+        echo "clientca_cn=$(cert_cn "${CLIENTCA_DIR}/ca.pem")"
+    fi
+
+    echo "hostname=${IKEV2_HOSTNAME}"
+    echo "enc=${IKEV2_ENC}"
+    set -- $(detect_iface)
+    echo "iface_name=${1:-}"
+    echo "iface_ip=${2:-}"
+    # listen-interface selection + the list of interfaces to choose from
+    # (comma-separated "name:ip", for the UI dropdown)
+    echo "iface=${IKEV2_IFACE}"
+    echo "iface_list=$(list_ifaces | awk '{ printf "%s%s:%s", (n++?",":""), $1, $2 }')"
+    echo "listen_addrs=$(listen_addrs)"
+    echo "last_applied=$(cat "${ETC}/last_applied" 2>/dev/null)"
+
+    echo "mschapv2=${IKEV2_ENABLE_MSCHAPV2}"
+    echo "mschapv2_auth=${IKEV2_MSCHAPV2_AUTH}"
+    echo "subnet_mschapv2=${IKEV2_SUBNET_MSCHAPV2}"
+    echo "dns_mschapv2=${IKEV2_DNS_MSCHAPV2}"
+
+    echo "psk_enabled=${IKEV2_ENABLE_PSK}"
+    echo "psk=${IKEV2_PSK}"
+    echo "subnet_psk=${IKEV2_SUBNET_PSK}"
+    echo "dns_psk=${IKEV2_DNS_PSK}"
+
+    echo "rsa_enabled=${IKEV2_ENABLE_RSA}"
+    echo "subnet_rsa=${IKEV2_SUBNET_RSA}"
+    echo "dns_rsa=${IKEV2_DNS_RSA}"
+
+    echo "eaptls_enabled=${IKEV2_ENABLE_EAPTLS}"
+    echo "subnet_eaptls=${IKEV2_SUBNET_EAPTLS}"
+    echo "dns_eaptls=${IKEV2_DNS_EAPTLS}"
+
+    # DSM-account MSCHAPv2: how many active DSM accounts would be registered
+    # (NT hashes read live from synosmbpasswd.conf, disabled/empty excluded)
+    echo "dsm_accounts=$(dsm_ntlm_secrets 2>/dev/null | grep -c '^    ntlm-')"
+
+    echo "autoblock=${IKEV2_AUTOBLOCK}"
+    "${TARGET}/bin/ikev2watch" status 2>/dev/null
+
+    # plugin availability - our own bundled charon build (fixed feature
+    # set, compiled with eap-identity/eap-mschapv2/eap-radius/eap-tls)
+    if charon_running; then
+        LOADED=$(swanctl --list-plugins 2>/dev/null)
+        printf '%s' "$LOADED" | grep -qw "eap-tls"      && echo "plugin_eap_tls=yes"      || echo "plugin_eap_tls=no"
+        printf '%s' "$LOADED" | grep -qw "eap-radius"    && echo "plugin_eap_radius=yes"    || echo "plugin_eap_radius=no"
+        printf '%s' "$LOADED" | grep -qw "eap-mschapv2"  && echo "plugin_eap_mschapv2=yes"  || echo "plugin_eap_mschapv2=no"
+    else
+        echo "plugin_eap_tls=unknown"
+        echo "plugin_eap_radius=unknown"
+        echo "plugin_eap_mschapv2=unknown"
+    fi
+
+    N=0
+    [ -f "$USERS" ] && N=$(grep -c ':' "$USERS" 2>/dev/null)
+    echo "users=${N}"
+
+    CERTS=0
+    [ -d "$ISSUED_DIR" ] && CERTS=$(find "$ISSUED_DIR" -name '*.pem' 2>/dev/null | wc -l | tr -d ' ')
+    echo "certs=${CERTS}"
+
+    CONNS=$(list_connections)
+    TOTAL=0; C_MSCHAPV2=0; C_PSK=0; C_RSA=0; C_EAPTLS=0
+    if [ -n "$CONNS" ]; then
+        TOTAL=$(printf '%s\n' "$CONNS" | grep -c .)
+        C_MSCHAPV2=$(printf '%s\n' "$CONNS" | grep -c '^ikev2|')
+        C_PSK=$(printf '%s\n' "$CONNS" | grep -c '^ikev2-psk|')
+        C_RSA=$(printf '%s\n' "$CONNS" | grep -c '^ikev2-rsa|')
+        C_EAPTLS=$(printf '%s\n' "$CONNS" | grep -c '^ikev2-eaptls|')
+    fi
+    echo "connections=${TOTAL}"
+    echo "connections_mschapv2=${C_MSCHAPV2}"
+    echo "connections_psk=${C_PSK}"
+    echo "connections_rsa=${C_RSA}"
+    echo "connections_eaptls=${C_EAPTLS}"
+}
+
+do_clients() {
+    CONNS=$(list_connections)
+    if [ -z "$CONNS" ]; then
+        echo "(no active sessions)"
+        return 0
+    fi
+    printf 'conn|peer_ip|virtual_ip|state\n%s\n' "$CONNS"
+}
+
+do_log_dump() {
+    cat "$LOG" 2>/dev/null
+}
+
+case "$1" in
+    apply)       do_apply ;;
+    remove)      do_remove ;;
+    reload)      do_reload ;;
+    status)      do_status ;;
+    clients)     do_clients ;;
+    disconnect)  disconnect_conn "$2" ;;
+    log-dump)    do_log_dump ;;
+    cert-issue)  cert_issue "$2" "$3" "$4" ;;
+    cert-list)   cert_list ;;
+    cert-del)    cert_del "$2" ;;
+    *)
+        echo "usage: $0 apply|remove|reload|status|clients|disconnect|log-dump|cert-issue|cert-list|cert-del" >&2
+        exit 1
+        ;;
+esac

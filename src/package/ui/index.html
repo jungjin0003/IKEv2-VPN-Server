@@ -1,0 +1,942 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>IKEv2 VPN Server</title>
+<style>
+:root{
+    --bg:#eef1f4;--card:#ffffff;--line:#e6eaee;--line2:#eef1f4;--txt:#2b3138;--sub:#8b939b;
+    --accent:#1f6fb2;--accent-h:#0a76c4;--accent-bg:#eaf3fb;
+    --ok:#2fa85e;--ok-bg:#e8f7ee;--bad:#e5734a;--bad-bg:#fdf1e7;--warn:#d97a3a;
+}
+*{box-sizing:border-box}
+body{margin:0;font-family:"Segoe UI","Apple SD Gothic Neo","Malgun Gothic",system-ui,sans-serif;
+    color:var(--txt);background:var(--bg);font-size:13px}
+a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
+input,select,button{font-family:inherit;font-size:13px}
+input:disabled,select:disabled{background:#f5f6f7!important;color:#b0b5ba!important;border-color:#e0e4e8!important}
+select:focus,input:focus{border-color:var(--accent)!important;outline:none}
+::-webkit-scrollbar{width:10px;height:10px}
+::-webkit-scrollbar-thumb{background:#c9d0d7;border-radius:5px;border:2px solid transparent;background-clip:padding-box}
+
+.app{display:flex;flex-direction:column;height:100vh;min-height:600px}
+.topbar{height:54px;flex:none;background:var(--accent);display:flex;align-items:center;
+    padding:0 20px;color:#fff;gap:12px;box-shadow:0 1px 3px rgba(0,0,0,.15);z-index:5}
+.topbar .title{font-size:16px;font-weight:600}
+.topbar .badge{padding:2px 9px;border-radius:11px;background:rgba(255,255,255,.18);font-size:11.5px;font-weight:600}
+.topbar .spacer{flex:1}
+.topbar .stat{display:flex;align-items:center;gap:8px;font-size:12.5px;font-weight:700;
+    background:transparent;border:none;border-radius:0;padding:0;color:#fff}
+.dot{width:9px;height:9px;border-radius:50%;flex:none}
+.dot.ok{background:#54d17a;box-shadow:0 0 0 3px rgba(84,209,122,.25)}
+.dot.bad{background:#e2e6ea}
+.iconbtn{background:rgba(255,255,255,.14);border:none;color:#fff;width:32px;height:32px;
+    border-radius:7px;cursor:pointer;display:flex;align-items:center;justify-content:center}
+.iconbtn:hover{background:rgba(255,255,255,.26)}
+
+.body{flex:1;display:flex;min-height:0}
+.sidebar{width:250px;flex:none;background:#fff;border-right:1px solid var(--line);padding:10px 0;overflow-y:auto}
+.sidebar .hd{padding:12px 20px 8px;font-size:11px;font-weight:700;color:#aab2ba;letter-spacing:.6px;text-transform:uppercase}
+.navitem{display:flex;align-items:center;gap:11px;padding:10px 20px;cursor:pointer;font-size:13.5px;
+    color:#3b4249;font-weight:600;border-left:3px solid transparent;user-select:none}
+.navitem:hover{background:#f2f6fa}
+.navitem.active{color:var(--accent);font-weight:700;background:var(--accent-bg);border-left-color:var(--accent)}
+.navitem svg{flex:none}
+.navitem .nm{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.navitem .dot{width:7px;height:7px}
+
+.main{flex:1;min-width:0;overflow-y:auto}
+.page{padding:24px 28px 40px;max-width:1200px}
+.page h1{font-size:20px;font-weight:700;margin:0 0 4px}
+.page .desc{color:var(--sub);margin-bottom:18px}
+.hidden{display:none!important}
+
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;overflow:hidden;margin-bottom:16px}
+.card .pad{padding:18px 20px}
+.card h2{font-size:14.5px;font-weight:700;margin:0}
+.card .chd{padding:14px 18px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--line2)}
+
+.notice{margin:0 0 14px;padding:10px 14px;border-radius:8px;background:var(--bad-bg);color:#a6431c;font-size:12.5px;line-height:1.5}
+.notice.show{display:block}.notice{display:none}
+.notice a{color:#a6431c;text-decoration:underline}
+
+.statgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:14px;margin-bottom:18px}
+.stat{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px 18px}
+.stat .top{display:flex;align-items:center;gap:9px;color:var(--sub);font-size:12px;font-weight:600}
+.stat .ic{width:28px;height:28px;border-radius:8px;display:flex;align-items:center;justify-content:center;flex:none}
+.stat .val{font-size:26px;font-weight:700;margin-top:10px;line-height:1}
+.stat .val .unit{font-size:13px;font-weight:500;color:#9aa2a8;margin-left:3px}
+.stat .sub{font-size:11.5px;color:#9aa2a8;margin-top:5px}
+
+table{width:100%;border-collapse:collapse}
+.thead{display:grid;padding:9px 18px;font-size:11.5px;color:#9aa2a8;background:#fafbfc;border-bottom:1px solid var(--line2)}
+.trow{display:grid;padding:12px 18px;align-items:center;border-bottom:1px solid var(--line2);font-size:12.5px}
+.trow:last-child{border-bottom:none}
+.trow:hover{background:#f8fafc}
+.empty{padding:60px 20px;text-align:center;color:#aab2ba}
+.empty svg{margin-bottom:8px}
+
+.badge2{display:inline-flex;align-items:center;gap:6px;padding:3px 10px;border-radius:12px;font-size:11.5px;font-weight:600}
+.badge2 .d{width:6px;height:6px;border-radius:50%}
+.beta-tag{font-size:10.5px;font-weight:700;letter-spacing:.5px;color:#8a5a00;background:#ffe6b0;padding:2px 7px;border-radius:6px;line-height:1.4}
+.sidebar .hd.beta{color:#b07400}
+
+.form-row{display:grid;grid-template-columns:170px 1fr;align-items:center;gap:12px;margin-bottom:13px}
+.form-row label{color:#4a525a}
+.form-row input[type=text],.form-row input[type=password],.form-row select{
+    height:32px;border:1px solid #c3ccd4;border-radius:6px;padding:0 8px;max-width:320px;width:100%}
+.chk{display:flex;align-items:center;gap:8px;cursor:pointer}
+.chk input{width:15px;height:15px;accent-color:var(--accent);margin:0}
+
+.btn{padding:8px 20px;font-size:13px;border-radius:8px;cursor:pointer;border:1px solid #d5dce2;background:#fff;color:#333}
+.btn:hover{background:#f2f4f6}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+.btn.primary:hover{background:var(--accent-h)}
+.btn.danger{border-color:#f0c4b8;color:#c0472a;background:#fff}
+.btn.danger:hover{background:#fdf1e7}
+.btn.sm{padding:5px 12px;font-size:12px;border-radius:6px}
+.btn:disabled{opacity:.5;cursor:default}
+.actions{display:flex;justify-content:flex-end;gap:10px;margin-top:16px}
+.toolbar{padding:12px 18px;display:flex;gap:8px;align-items:center;border-bottom:1px solid var(--line2)}
+
+.searchbox{position:relative;width:220px}
+.searchbox svg{position:absolute;left:9px;top:9px}
+.searchbox input{width:100%;height:32px;border:1px solid #c3ccd4;border-radius:6px;padding:0 8px 0 30px}
+
+#toast{position:fixed;bottom:26px;left:50%;transform:translateX(-50%) translateY(20px);
+    background:rgba(40,44,48,.94);color:#fff;padding:9px 20px;border-radius:8px;font-size:12.5px;
+    box-shadow:0 4px 14px rgba(0,0,0,.25);opacity:0;pointer-events:none;transition:.2s}
+#toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+</style>
+</head>
+<body>
+
+<div class="app">
+  <div class="topbar">
+    <svg width="24" height="24" viewBox="0 0 16 16" fill="none" stroke="#fff" stroke-width="1.3"><rect x="1.5" y="2.5" width="13" height="8.5" rx="1"></rect><path d="M5.5 14h5M8 11v3"></path><path d="M4.5 5.5l2 2-2 2M8 9.5h3.5" stroke-width="1.2"></path></svg>
+    <div class="title">IKEv2 VPN Server</div>
+    <div class="badge">DSM 7.2</div>
+    <div class="spacer"></div>
+    <div class="stat"><span class="dot" id="d_svc"></span><span id="t_svc">-</span></div>
+    <button class="iconbtn" id="btn_refresh" data-i18n-title="refresh_title" title="새로고침"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9"></path><path d="M13.5 1.5v3.5H10"></path></svg></button>
+  </div>
+
+  <div class="body">
+    <div class="sidebar">
+      <div class="hd" data-i18n="nav_service_group">VPN 서비스 관리</div>
+      <div class="navitem" data-nav="overview"><svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="1.5" y="2" width="5.5" height="5.5" rx="1"></rect><rect x="9" y="2" width="5.5" height="5.5" rx="1"></rect><rect x="1.5" y="8.5" width="5.5" height="5.5" rx="1"></rect><rect x="9" y="8.5" width="5.5" height="5.5" rx="1"></rect></svg><span class="nm" data-i18n="nav_overview">개요</span></div>
+      <div class="navitem" data-nav="connections"><svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M5.5 1.5v3.5M10.5 1.5v3.5"></path><rect x="3.5" y="5" width="9" height="5.5" rx="1.5"></rect><path d="M8 10.5v4"></path></svg><span class="nm" data-i18n="nav_connections">연결 목록</span></div>
+      <div class="navitem" data-nav="log"><svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M5.5 4h9M5.5 8h9M5.5 12h9"></path><path d="M2 4h.01M2 8h.01M2 12h.01" stroke-width="2.2" stroke-linecap="round"></path></svg><span class="nm" data-i18n="nav_log">로그</span></div>
+      <div class="navitem" data-nav="general"><svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="8" cy="8" r="2.4"></circle><path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M12.6 3.4l-1.4 1.4M4.8 11.2l-1.4 1.4"></path></svg><span class="nm" data-i18n="nav_general">일반 설정</span></div>
+      <div class="navitem" data-nav="accounts"><svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="8" cy="5.5" r="2.5"></circle><path d="M2.5 14c.7-3 3-4.2 5.5-4.2s4.8 1.2 5.5 4.2"></path></svg><span class="nm" data-i18n="nav_accounts">VPN 계정</span></div>
+      <div class="hd" data-i18n="nav_server_group">VPN Server 설정</div>
+      <div class="navitem" data-nav="mschapv2"><svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="2" y="2" width="12" height="4" rx="1"></rect><rect x="2" y="7.5" width="12" height="4" rx="1"></rect><circle cx="4.5" cy="4" r=".6" fill="currentColor" stroke="none"></circle><circle cx="4.5" cy="9.5" r=".6" fill="currentColor" stroke="none"></circle><path d="M11 4h1.5M11 9.5h1.5"></path></svg><span class="nm">IKEv2/IPsec MSCHAPv2</span><span class="dot" id="d_srv_mschapv2"></span></div>
+      <div class="hd beta">Beta</div>
+      <div class="navitem" data-nav="psk"><svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="2" y="2" width="12" height="4" rx="1"></rect><rect x="2" y="7.5" width="12" height="4" rx="1"></rect><circle cx="4.5" cy="4" r=".6" fill="currentColor" stroke="none"></circle><circle cx="4.5" cy="9.5" r=".6" fill="currentColor" stroke="none"></circle><path d="M11 4h1.5M11 9.5h1.5"></path></svg><span class="nm">IKEv2/IPsec PSK</span><span class="dot" id="d_srv_psk"></span></div>
+      <div class="navitem" data-nav="rsa"><svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="2" y="2" width="12" height="4" rx="1"></rect><rect x="2" y="7.5" width="12" height="4" rx="1"></rect><circle cx="4.5" cy="4" r=".6" fill="currentColor" stroke="none"></circle><circle cx="4.5" cy="9.5" r=".6" fill="currentColor" stroke="none"></circle><path d="M11 4h1.5M11 9.5h1.5"></path></svg><span class="nm">IKEv2/IPsec RSA</span><span class="dot" id="d_srv_rsa"></span></div>
+      <div class="navitem" data-nav="eaptls"><svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="2" y="2" width="12" height="4" rx="1"></rect><rect x="2" y="7.5" width="12" height="4" rx="1"></rect><circle cx="4.5" cy="4" r=".6" fill="currentColor" stroke="none"></circle><circle cx="4.5" cy="9.5" r=".6" fill="currentColor" stroke="none"></circle><path d="M11 4h1.5M11 9.5h1.5"></path></svg><span class="nm">IKEv2/IPsec EAP-TLS</span><span class="dot" id="d_srv_eaptls"></span></div>
+    </div>
+
+    <div class="main">
+
+      <!-- ================= overview ================= -->
+      <div class="page" id="pg_overview">
+        <h1 data-i18n="ov_title">개요</h1>
+        <div class="desc" data-i18n="ov_desc">IKEv2 VPN 서버의 현재 상태입니다.</div>
+        <div class="notice" id="n_setup"></div>
+        <div class="notice" id="n_daemon"></div>
+
+        <div style="margin-bottom:18px">
+          <button class="btn primary" id="btn_svc_enable" data-i18n="btn_enable">활성화</button>
+          <button class="btn" id="btn_svc_disable" data-i18n="btn_disable">비활성화</button>
+        </div>
+
+        <div class="statgrid">
+          <div class="stat"><div class="top"><span class="ic" style="background:var(--accent-bg);color:var(--accent)">&#128421;</span><span data-i18n="stat_active">활성 서버</span></div><div class="val" id="s_active">-<span class="unit">/ 4</span></div><div class="sub" data-i18n="stat_active_sub">인증 방식 4개 중</div></div>
+          <div class="stat"><div class="top"><span class="ic" style="background:var(--ok-bg);color:var(--ok)">&#128279;</span><span data-i18n="stat_conn">현재 연결</span></div><div class="val" id="s_conn">-</div><div class="sub" data-i18n="stat_conn_sub">실시간 세션 수</div></div>
+          <div class="stat"><div class="top"><span class="ic" style="background:#fdf1e7;color:#d97a3a">&#128196;</span><span data-i18n="stat_certs">발급된 인증서</span></div><div class="val" id="s_certs">-</div><div class="sub" data-i18n="stat_certs_sub">RSA / EAP-TLS 클라이언트</div></div>
+          <div class="stat"><div class="top"><span class="ic" style="background:#f0ecfb;color:#7159c4">&#128100;</span><span data-i18n="stat_users">등록된 VPN 계정</span></div><div class="val" id="s_users">-</div><div class="sub" data-i18n="stat_users_sub">패키지 로컬 계정</div></div>
+        </div>
+
+        <div style="display:grid;grid-template-columns:1.5fr 1fr;gap:16px;align-items:start">
+          <div class="card">
+            <div class="chd"><h2 data-i18n="ov_serverstate">VPN 서버 상태</h2><span id="t_enabledcount" style="font-size:12px;color:var(--sub)"></span></div>
+            <div class="thead" style="grid-template-columns:1.5fr 1fr 1.4fr .9fr"><div data-i18n="th_server">서버</div><div data-i18n="th_status">상태</div><div data-i18n="th_subnet">클라이언트 IP 대역</div><div style="text-align:right" data-i18n="th_conn">연결</div></div>
+            <div id="ov_rows"></div>
+          </div>
+          <div class="card"><div class="pad">
+            <h2 style="margin-bottom:14px" data-i18n="ov_serverinfo">서버 정보</h2>
+            <div style="display:grid;grid-template-columns:auto 1fr;row-gap:11px;column-gap:14px;font-size:12.5px">
+              <span style="color:var(--sub)" data-i18n="info_addr">외부 주소</span><span id="i_addr" style="text-align:right;font-weight:600">-</span>
+              <span style="color:var(--sub)" data-i18n="info_iface">감지된 네트워크 인터페이스</span><span id="i_iface" style="text-align:right;font-weight:600">-</span>
+              <span style="color:var(--sub)" data-i18n="info_port">서비스 포트</span><span style="text-align:right;font-weight:600">UDP 500, 4500</span>
+              <span style="color:var(--sub)" data-i18n="info_applied">마지막 설정 적용</span><span id="i_applied" style="text-align:right;font-weight:600">-</span>
+            </div>
+          </div></div>
+        </div>
+      </div>
+
+      <!-- ================= connections ================= -->
+      <div class="page hidden" id="pg_connections">
+        <h1 data-i18n="conn_title">연결 목록</h1>
+        <div class="desc" data-i18n="conn_desc">현재 연결된 IKEv2 VPN 세션입니다.</div>
+        <div class="card">
+          <div class="toolbar"><div style="flex:1"></div><button class="btn" id="btn_conn_refresh" data-i18n="btn_refresh2">새로 고침</button></div>
+          <div class="thead" style="grid-template-columns:1.1fr 1.3fr 1.3fr 1fr .9fr"><div data-i18n="th_proto">프로토콜</div><div data-i18n="th_clientip">클라이언트 IP</div><div data-i18n="th_assignedip">할당 IP</div><div data-i18n="th_status">상태</div><div style="text-align:right" data-i18n="th_action">작업</div></div>
+          <div id="conn_rows"></div>
+        </div>
+      </div>
+
+      <!-- ================= log ================= -->
+      <div class="page hidden" id="pg_log">
+        <h1 data-i18n="log_title">로그</h1>
+        <div class="desc" data-i18n="log_desc">인증 성공/실패 및 연결 종료 이벤트입니다 (최근 300건).</div>
+        <div class="card">
+          <div class="toolbar">
+            <button class="btn" id="btn_log_clear" data-i18n="btn_clear">정리</button>
+            <button class="btn" id="btn_log_export" data-i18n="btn_export">내보내기</button>
+            <div style="flex:1"></div>
+            <select id="f_log_proto" style="width:200px;height:34px;border:1px solid #c3ccd4;border-radius:6px;padding:0 8px">
+              <option value="" data-i18n="opt_all">모두</option>
+              <option value="MSCHAPv2">IKEv2/IPsec MSCHAPv2</option>
+              <option value="PSK">IKEv2/IPsec PSK</option>
+              <option value="RSA">IKEv2/IPsec RSA</option>
+              <option value="EAP-TLS">IKEv2/IPsec EAP-TLS</option>
+            </select>
+          </div>
+          <div class="thead" style="grid-template-columns:1.3fr 1fr 1fr 2fr"><div data-i18n="th_datetime">날짜 및 시간</div><div data-i18n="th_proto">프로토콜</div><div data-i18n="th_ip">IP</div><div data-i18n="th_event">이벤트</div></div>
+          <div id="log_rows"></div>
+        </div>
+      </div>
+
+      <!-- ================= general ================= -->
+      <div class="page hidden" id="pg_general">
+        <h1 data-i18n="gen_title">일반 설정</h1>
+        <div class="desc" data-i18n="gen_desc">서버 공통 설정입니다.</div>
+        <div class="card"><div class="pad">
+          <div class="form-row"><label data-i18n="lbl_hostname">외부 호스트 이름</label><input type="text" id="g_hostname" data-i18n-ph="ph_hostname" placeholder="비우면 인증서 CN 사용"></div>
+          <div class="form-row"><label data-i18n="lbl_enc">암호화</label>
+            <select id="g_enc"><option value="auto" data-i18n="enc_auto_opt">권장 (자동, 여러 후보 제공)</option><option value="aes256" data-i18n="enc_aes256">AES-256만</option><option value="aes128" data-i18n="enc_aes128">AES-128만</option></select>
+          </div>
+          <div class="form-row"><label data-i18n="lbl_iface">수신 인터페이스</label>
+            <select id="g_iface"><option value="" data-i18n="opt_all_ifaces">모든 인터페이스</option></select>
+          </div>
+          <div class="form-row"><label data-i18n="lbl_egress">인터넷 연결 인터페이스</label><span id="g_iface_ro" style="color:#4a525a">-</span></div>
+        </div></div>
+        <div class="card"><div class="pad">
+          <h2 style="margin-bottom:12px" data-i18n="sec_title">보안</h2>
+          <label class="chk"><input type="checkbox" id="g_autoblock"><span data-i18n="autoblock_label">DSM 자동 차단 연동 (인증 실패 IP를 DSM 자동 차단 목록에 등록)</span></label>
+          <div class="notice" id="n_dsmab" style="margin-top:10px"></div>
+        </div></div>
+        <div class="actions"><button class="btn" id="btn_general_reset" data-i18n="btn_reset">재설정</button><button class="btn primary" id="btn_general_apply" data-i18n="btn_apply">적용</button></div>
+      </div>
+
+      <!-- ================= VPN accounts ================= -->
+      <div class="page hidden" id="pg_accounts">
+        <h1 data-i18n="acc_title">VPN 계정</h1>
+        <div class="desc" data-i18n="acc_desc">MSCHAPv2(패키지 계정 모드)에서 사용할 로컬 VPN 계정입니다. DSM 계정 모드는 활성화된 DSM 사용자 계정을 그대로 사용합니다(비활성/무암호 계정은 자동 제외).</div>
+        <div class="card">
+          <div class="toolbar">
+            <input type="text" id="a_user" data-i18n-ph="ph_username" placeholder="사용자 이름" style="height:32px;border:1px solid #c3ccd4;border-radius:6px;padding:0 8px;width:160px">
+            <input type="password" id="a_pass" data-i18n-ph="ph_password" placeholder="비밀번호" style="height:32px;border:1px solid #c3ccd4;border-radius:6px;padding:0 8px;width:160px">
+            <button class="btn primary sm" id="btn_user_add" data-i18n="btn_addaccount">계정 추가</button>
+            <div style="flex:1"></div>
+            <div class="searchbox"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="#9aa2a8" stroke-width="1.6"><circle cx="7" cy="7" r="4.5"></circle><path d="M10.5 10.5L14 14"></path></svg><input id="a_search" data-i18n-ph="ph_search" placeholder="검색"></div>
+          </div>
+          <div class="thead" style="grid-template-columns:2fr 1fr"><div data-i18n="th_username">사용자 이름</div><div style="text-align:right" data-i18n="th_action">작업</div></div>
+          <div id="acc_rows"></div>
+        </div>
+      </div>
+
+      <!-- ================= per-server pages (mschapv2/psk/rsa/eaptls) ================= -->
+      <div class="page hidden" id="pg_server">
+        <div style="display:flex;align-items:center;gap:12px;margin-bottom:6px">
+          <span style="width:38px;height:38px;border-radius:10px;background:var(--accent-bg);display:flex;align-items:center;justify-content:center;flex:none"><svg width="20" height="20" viewBox="0 0 16 16" fill="none" stroke="var(--accent)" stroke-width="1.2"><rect x="2" y="2" width="12" height="4.5" rx="1"></rect><rect x="2" y="8" width="12" height="4.5" rx="1"></rect><circle cx="4.4" cy="4.25" r=".7" fill="var(--accent)" stroke="none"></circle><circle cx="4.4" cy="10.25" r=".7" fill="var(--accent)" stroke="none"></circle></svg></span>
+          <div><div style="font-size:20px;font-weight:700;display:flex;align-items:center;gap:8px"><span id="sv_title">-</span><span id="sv_beta_tag" class="beta-tag hidden">BETA</span></div><div style="font-size:12.5px;color:var(--sub)" data-i18n="sv_desc">이 인증 방식을 사용하는 IKEv2 VPN 서버를 구성합니다.</div></div>
+        </div>
+
+        <div class="notice" id="n_beta" style="background:#fff6e5;color:#8a5a00" data-i18n-html="beta_notice">이 인증 방식은 <b>Beta</b> 기능입니다. 실기기 검증이 충분하지 않아 예고 없이 동작이 바뀌거나 정상 동작하지 않을 수 있습니다. 안정적인 사용에는 <b>IKEv2/IPsec MSCHAPv2</b>를 권장합니다.</div>
+
+        <div class="card"><div class="pad">
+          <label class="chk" style="padding-bottom:16px;margin-bottom:16px;border-bottom:1px solid var(--line2)"><input type="checkbox" id="sv_enabled"><span style="font-weight:600;font-size:14px" id="sv_enabled_label">서버 활성화</span></label>
+
+          <div class="form-row"><label data-i18n="lbl_subnet">클라이언트 IP 대역 (CIDR)</label><input type="text" id="sv_subnet" placeholder="10.10.0.0/24"></div>
+          <div class="form-row"><label data-i18n="lbl_dns">DNS</label><input type="text" id="sv_dns" placeholder="8.8.8.8"></div>
+
+          <div class="form-row hidden" id="row_authsrc"><label data-i18n="lbl_authsrc">인증 소스</label>
+            <select id="sv_authsrc"><option value="local" data-i18n="authsrc_local">패키지 VPN 계정</option><option value="dsm" data-i18n="authsrc_dsm">DSM 사용자 계정</option></select>
+          </div>
+          <div class="notice" id="n_radius"></div>
+
+          <div class="form-row hidden" id="row_psk"><label data-i18n="lbl_psk">사전 공유 키</label><input type="password" id="sv_psk" data-i18n-ph="ph_psk_auto" placeholder="비워두면 자동 생성"></div>
+
+          <div class="form-row"><label data-i18n="lbl_enc">암호화</label><span id="sv_enc_ro" style="color:#4a525a">-</span>&nbsp;<a href="#" id="sv_enc_link" data-i18n="enc_change_link">(일반 설정에서 변경)</a></div>
+
+          <div class="form-row hidden" id="row_cert"><label data-i18n="lbl_servercert">서버 인증서</label><span id="sv_cert_ro" style="color:#4a525a">-</span></div>
+          <div class="form-row hidden" id="row_clientca"><label data-i18n="lbl_clientca">클라이언트 CA</label><span id="sv_clientca_ro" style="color:#4a525a" data-i18n="clientca_default">패키지 자체 발급 CA</span></div>
+        </div></div>
+
+        <div class="actions"><button class="btn" id="btn_server_reset" data-i18n="btn_reset">재설정</button><button class="btn primary" id="btn_server_apply" data-i18n="btn_apply">적용</button></div>
+
+        <!-- profile downloads -->
+        <div class="card hidden" id="card_profiles"><div class="pad">
+          <h2 style="margin-bottom:12px" data-i18n="profiles_title">클라이언트 프로필</h2>
+          <div style="display:flex;flex-wrap:wrap;gap:8px" id="profile_buttons"></div>
+        </div></div>
+
+        <!-- client certificates (rsa / eaptls) -->
+        <div class="card hidden" id="card_certs">
+          <div class="chd"><h2 data-i18n="clientcert_title">클라이언트 인증서</h2></div>
+          <div class="pad" style="padding-bottom:0">
+            <div style="display:flex;gap:8px;margin-bottom:14px">
+              <input type="text" id="c_name" data-i18n-ph="ph_certname" placeholder="인증서 이름" style="height:32px;border:1px solid #c3ccd4;border-radius:6px;padding:0 8px;width:160px">
+              <input type="password" id="c_pass" data-i18n-ph="ph_p12pass" placeholder="P12 비밀번호" style="height:32px;border:1px solid #c3ccd4;border-radius:6px;padding:0 8px;width:160px">
+              <button class="btn primary sm" id="btn_cert_issue" data-i18n="btn_issue">발급 &amp; 다운로드</button>
+            </div>
+          </div>
+          <div class="thead" style="grid-template-columns:1.6fr 1.4fr .8fr"><div data-i18n="th_name">이름</div><div data-i18n="th_expiry">만료일</div><div style="text-align:right" data-i18n="th_action">작업</div></div>
+          <div id="cert_rows"></div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<form id="f_download" method="POST" style="display:none" target="dl_frame"></form>
+<iframe name="dl_frame" style="display:none"></iframe>
+
+<script>
+// ------------------------------------------------------------ i18n
+// Korean for Korean browsers, English for everyone else.
+var LANG = (function () {
+    var l = (navigator.languages && navigator.languages[0]) || navigator.language || navigator.userLanguage || "en";
+    return /^ko/i.test(l) ? "ko" : "en";
+})();
+
+var I18N = {
+    ko: {
+        refresh_title: "새로고침",
+        nav_service_group: "VPN 서비스 관리", nav_server_group: "VPN Server 설정",
+        nav_overview: "개요", nav_connections: "연결 목록", nav_log: "로그", nav_general: "일반 설정", nav_accounts: "VPN 계정",
+        ov_title: "개요", ov_desc: "IKEv2 VPN 서버의 현재 상태입니다.",
+        btn_enable: "활성화", btn_disable: "비활성화",
+        stat_active: "활성 서버", stat_active_sub: "인증 방식 4개 중",
+        stat_conn: "현재 연결", stat_conn_sub: "실시간 세션 수",
+        stat_certs: "발급된 인증서", stat_certs_sub: "RSA / EAP-TLS 클라이언트",
+        stat_users: "등록된 VPN 계정", stat_users_sub: "패키지 로컬 계정",
+        ov_serverstate: "VPN 서버 상태", ov_serverinfo: "서버 정보",
+        th_server: "서버", th_status: "상태", th_subnet: "클라이언트 IP 대역", th_conn: "연결",
+        info_addr: "외부 주소", info_iface: "감지된 네트워크 인터페이스", info_port: "서비스 포트", info_applied: "마지막 설정 적용",
+        conn_title: "연결 목록", conn_desc: "현재 연결된 IKEv2 VPN 세션입니다.",
+        btn_refresh2: "새로 고침",
+        th_proto: "프로토콜", th_clientip: "클라이언트 IP", th_assignedip: "할당 IP", th_action: "작업",
+        log_title: "로그", log_desc: "인증 성공/실패 및 연결 종료 이벤트입니다 (최근 300건).",
+        btn_clear: "정리", btn_export: "내보내기", opt_all: "모두",
+        th_datetime: "날짜 및 시간", th_ip: "IP", th_event: "이벤트",
+        gen_title: "일반 설정", gen_desc: "서버 공통 설정입니다.",
+        lbl_hostname: "외부 호스트 이름", ph_hostname: "비우면 인증서 CN 사용",
+        lbl_enc: "암호화", enc_auto_opt: "권장 (자동, 여러 후보 제공)", enc_aes256: "AES-256만", enc_aes128: "AES-128만",
+        lbl_iface: "수신 인터페이스", opt_all_ifaces: "모든 인터페이스", lbl_egress: "인터넷 연결 인터페이스",
+        sec_title: "보안", autoblock_label: "DSM 자동 차단 연동 (인증 실패 IP를 DSM 자동 차단 목록에 등록)",
+        btn_reset: "재설정", btn_apply: "적용",
+        acc_title: "VPN 계정", acc_desc: "MSCHAPv2(패키지 계정 모드)에서 사용할 로컬 VPN 계정입니다. DSM 계정 모드는 활성화된 DSM 사용자 계정을 그대로 사용합니다(비활성/무암호 계정은 자동 제외).",
+        ph_username: "사용자 이름", ph_password: "비밀번호", btn_addaccount: "계정 추가", ph_search: "검색", th_username: "사용자 이름",
+        sv_desc: "이 인증 방식을 사용하는 IKEv2 VPN 서버를 구성합니다.",
+        beta_notice: "이 인증 방식은 <b>Beta</b> 기능입니다. 실기기 검증이 충분하지 않아 예고 없이 동작이 바뀌거나 정상 동작하지 않을 수 있습니다. 안정적인 사용에는 <b>IKEv2/IPsec MSCHAPv2</b>를 권장합니다.",
+        lbl_subnet: "클라이언트 IP 대역 (CIDR)", lbl_dns: "DNS",
+        lbl_authsrc: "인증 소스", authsrc_local: "패키지 VPN 계정", authsrc_dsm: "DSM 사용자 계정",
+        lbl_psk: "사전 공유 키", ph_psk_auto: "비워두면 자동 생성",
+        enc_change_link: "(일반 설정에서 변경)",
+        lbl_servercert: "서버 인증서", lbl_clientca: "클라이언트 CA", clientca_default: "패키지 자체 발급 CA",
+        profiles_title: "클라이언트 프로필", clientcert_title: "클라이언트 인증서",
+        ph_certname: "인증서 이름", ph_p12pass: "P12 비밀번호", btn_issue: "발급 & 다운로드",
+        th_name: "이름", th_expiry: "만료일",
+        svc_stopped: "서비스 중지됨", svc_running: "서비스 실행 중", svc_daemon_stopped: "IPsec 데몬 중지됨",
+        setup_notice: "<b>권한 설정이 필요합니다.</b> SSH에서 <code>sudo {cmd}</code>를 1회 실행한 뒤 새로고침하세요.",
+        daemon_notice: "IPsec 데몬이 실행 중이 아닙니다. 서비스를 다시 활성화하거나 로그를 확인하세요.",
+        enabled_count: "{n} / 4 활성화",
+        state_on: "활성화됨", state_off: "사용 안함", iface_none: "감지 안 됨",
+        loading: "불러오는 중…", load_failed: "불러오기 실패",
+        no_connections: "현재 연결된 사용자가 없습니다", btn_disconnect: "연결 해제",
+        confirm_disconnect: "이 인증 방식의 모든 세션을 연결 해제할까요?", disconnected_ok: "연결이 해제되었습니다",
+        fail: "실패",
+        ev_established: "연결 성공", ev_authfail: "인증 실패", ev_disconnected: "연결 해제",
+        no_events: "기록된 이벤트가 없습니다", confirm_clearlog: "로그를 정리할까요?", cleared_ok: "정리되었습니다",
+        enc_auto_short: "권장 (자동)",
+        dsmab_off: "DSM 자동 차단이 제어판 &gt; 보안 &gt; 보호에서 꺼져 있습니다. 이 옵션은 DSM 자동 차단이 켜져 있어야 동작합니다.",
+        iface_missing: "(없음)",
+        settings_applied: "설정이 적용되었습니다", status_query_failed: "상태 조회 실패", api_failed: "API 요청 실패",
+        no_search_results: "검색 결과가 없습니다", no_accounts: "등록된 계정이 없습니다",
+        btn_delete: "삭제", confirm_deluser: "'{user}' 계정을 삭제할까요?", deleted_ok: "삭제되었습니다",
+        enter_userpass: "사용자 이름/비밀번호를 입력하세요", account_added: "계정이 추가되었습니다",
+        server_enable_suffix: "{title} 서버 활성화",
+        psk_set: "설정됨 (비워두면 유지)",
+        selfsigned_suffix: " (자체 서명)", clientca_notissued: "패키지 자체 발급 CA (아직 발급 안 됨)",
+        radius_notice_main: "DSM 사용자 계정을 그대로 사용합니다. 서비스가 시작될 때마다 활성화된 DSM 계정을 자동으로 등록하며, <b>비활성화(만료)되거나 비밀번호가 없는 계정은 자동으로 제외</b>됩니다. 계정 추가·삭제나 비밀번호 변경은 다시 적용(재시작) 후 반영됩니다.",
+        radius_notice_count: "<br>현재 등록 가능한 활성 DSM 계정: <b>{n}개</b>.",
+        prof_android: "Android 안내", prof_ca: "CA 인증서",
+        no_certs: "발급된 인증서가 없습니다",
+        confirm_delcert: "'{name}' 인증서 기록을 삭제할까요? (폐기되지는 않습니다)",
+        enter_namepass: "이름/비밀번호를 입력하세요",
+        enable_failed: "활성화 실패", enabled_ok: "활성화되었습니다",
+        confirm_disable: "VPN 서비스를 비활성화할까요? 모든 연결이 끊어집니다.", disabled_ok: "비활성화되었습니다"
+    },
+    en: {
+        refresh_title: "Refresh",
+        nav_service_group: "VPN Service", nav_server_group: "VPN Server Settings",
+        nav_overview: "Overview", nav_connections: "Connections", nav_log: "Log", nav_general: "General", nav_accounts: "VPN Accounts",
+        ov_title: "Overview", ov_desc: "Current status of the IKEv2 VPN server.",
+        btn_enable: "Enable", btn_disable: "Disable",
+        stat_active: "Active servers", stat_active_sub: "of 4 auth methods",
+        stat_conn: "Current connections", stat_conn_sub: "live sessions",
+        stat_certs: "Issued certificates", stat_certs_sub: "RSA / EAP-TLS clients",
+        stat_users: "Registered VPN accounts", stat_users_sub: "package local accounts",
+        ov_serverstate: "VPN Server Status", ov_serverinfo: "Server Info",
+        th_server: "Server", th_status: "Status", th_subnet: "Client IP range", th_conn: "Conns",
+        info_addr: "External address", info_iface: "Detected interface", info_port: "Service ports", info_applied: "Last applied",
+        conn_title: "Connections", conn_desc: "Currently connected IKEv2 VPN sessions.",
+        btn_refresh2: "Refresh",
+        th_proto: "Protocol", th_clientip: "Client IP", th_assignedip: "Assigned IP", th_action: "Action",
+        log_title: "Log", log_desc: "Authentication and disconnect events (last 300).",
+        btn_clear: "Clear", btn_export: "Export", opt_all: "All",
+        th_datetime: "Date & time", th_ip: "IP", th_event: "Event",
+        gen_title: "General", gen_desc: "Settings common to all servers.",
+        lbl_hostname: "External hostname", ph_hostname: "blank = use certificate CN",
+        lbl_enc: "Encryption", enc_auto_opt: "Recommended (auto, several suites)", enc_aes256: "AES-256 only", enc_aes128: "AES-128 only",
+        lbl_iface: "Listen interface", opt_all_ifaces: "All interfaces", lbl_egress: "Internet interface",
+        sec_title: "Security", autoblock_label: "DSM Auto Block integration (register auth-failure IPs in DSM's Auto Block list)",
+        btn_reset: "Reset", btn_apply: "Apply",
+        acc_title: "VPN Accounts", acc_desc: "Local VPN accounts for MSCHAPv2 (package-account mode). DSM-account mode uses your active DSM user accounts directly (disabled/passwordless accounts are excluded automatically).",
+        ph_username: "Username", ph_password: "Password", btn_addaccount: "Add account", ph_search: "Search", th_username: "Username",
+        sv_desc: "Configure the IKEv2 VPN server for this authentication method.",
+        beta_notice: "This authentication method is a <b>Beta</b> feature. It has not been sufficiently tested on real devices and may change or not work without notice. For stable use, <b>IKEv2/IPsec MSCHAPv2</b> is recommended.",
+        lbl_subnet: "Client IP range (CIDR)", lbl_dns: "DNS",
+        lbl_authsrc: "Auth source", authsrc_local: "Package VPN accounts", authsrc_dsm: "DSM user accounts",
+        lbl_psk: "Pre-shared key", ph_psk_auto: "blank = auto-generate",
+        enc_change_link: "(change in General)",
+        lbl_servercert: "Server certificate", lbl_clientca: "Client CA", clientca_default: "Package-issued CA",
+        profiles_title: "Client profiles", clientcert_title: "Client certificates",
+        ph_certname: "Certificate name", ph_p12pass: "P12 password", btn_issue: "Issue & download",
+        th_name: "Name", th_expiry: "Expires",
+        svc_stopped: "Service stopped", svc_running: "Service running", svc_daemon_stopped: "IPsec daemon stopped",
+        setup_notice: "<b>Setup required.</b> Run <code>sudo {cmd}</code> once over SSH, then refresh.",
+        daemon_notice: "The IPsec daemon is not running. Re-enable the service or check the log.",
+        enabled_count: "{n} / 4 active",
+        state_on: "Enabled", state_off: "Disabled", iface_none: "Not detected",
+        loading: "Loading…", load_failed: "Failed to load",
+        no_connections: "No users are currently connected", btn_disconnect: "Disconnect",
+        confirm_disconnect: "Disconnect all sessions for this method?", disconnected_ok: "Disconnected",
+        fail: "Failed",
+        ev_established: "Connected", ev_authfail: "Auth failed", ev_disconnected: "Disconnected",
+        no_events: "No events recorded", confirm_clearlog: "Clear the log?", cleared_ok: "Cleared",
+        enc_auto_short: "Recommended (auto)",
+        dsmab_off: "DSM Auto Block is turned off in Control Panel &gt; Security &gt; Protection. This option requires DSM Auto Block to be on.",
+        iface_missing: "(missing)",
+        settings_applied: "Settings applied", status_query_failed: "Failed to query status", api_failed: "API request failed",
+        no_search_results: "No matching results", no_accounts: "No accounts registered",
+        btn_delete: "Delete", confirm_deluser: "Delete account '{user}'?", deleted_ok: "Deleted",
+        enter_userpass: "Enter a username and password", account_added: "Account added",
+        server_enable_suffix: "Enable {title} server",
+        psk_set: "Set (blank = keep)",
+        selfsigned_suffix: " (self-signed)", clientca_notissued: "Package-issued CA (not yet issued)",
+        radius_notice_main: "DSM user accounts are used directly. Each time the service starts, active DSM accounts are registered automatically, and <b>disabled (expired) or passwordless accounts are excluded</b>. Adding/removing accounts or changing passwords takes effect after re-applying (restart).",
+        radius_notice_count: "<br>Active DSM accounts currently eligible: <b>{n}</b>.",
+        prof_android: "Android guide", prof_ca: "CA certificate",
+        no_certs: "No certificates issued",
+        confirm_delcert: "Delete the record for certificate '{name}'? (It is not revoked.)",
+        enter_namepass: "Enter a name and password",
+        enable_failed: "Enable failed", enabled_ok: "Enabled",
+        confirm_disable: "Disable the VPN service? All connections will drop.", disabled_ok: "Disabled"
+    }
+};
+
+function t(key, vars) {
+    var s = (I18N[LANG] && I18N[LANG][key]);
+    if (s == null) s = I18N.en[key];
+    if (s == null) s = key;
+    if (vars) { for (var k in vars) s = s.split("{" + k + "}").join(vars[k]); }
+    return s;
+}
+
+function applyStaticI18n() {
+    document.documentElement.lang = LANG;
+    var i, els;
+    els = document.querySelectorAll("[data-i18n]");
+    for (i = 0; i < els.length; i++) els[i].textContent = t(els[i].getAttribute("data-i18n"));
+    els = document.querySelectorAll("[data-i18n-html]");
+    for (i = 0; i < els.length; i++) els[i].innerHTML = t(els[i].getAttribute("data-i18n-html"));
+    els = document.querySelectorAll("[data-i18n-ph]");
+    for (i = 0; i < els.length; i++) els[i].placeholder = t(els[i].getAttribute("data-i18n-ph"));
+    els = document.querySelectorAll("[data-i18n-title]");
+    for (i = 0; i < els.length; i++) els[i].title = t(els[i].getAttribute("data-i18n-title"));
+}
+
+// ------------------------------------------------------------ app
+var API = "api.cgi";
+var STATE = null;
+var PAGE = "overview";
+var SERVER_DEFS = {
+    mschapv2: { title: "IKEv2/IPsec MSCHAPv2", enField: "mschapv2", subnetField: "subnet_mschapv2", dnsField: "dns_mschapv2", authsrc: true, psk: false, cert: true, clientca: false, connKey: "connections_mschapv2" },
+    psk:      { title: "IKEv2/IPsec PSK",      enField: "psk_enabled", subnetField: "subnet_psk", dnsField: "dns_psk", authsrc: false, psk: true, cert: false, clientca: false, connKey: "connections_psk", beta: true },
+    rsa:      { title: "IKEv2/IPsec RSA",      enField: "rsa_enabled", subnetField: "subnet_rsa", dnsField: "dns_rsa", authsrc: false, psk: false, cert: true, clientca: true, connKey: "connections_rsa", beta: true },
+    eaptls:   { title: "IKEv2/IPsec EAP-TLS",  enField: "eaptls_enabled", subnetField: "subnet_eaptls", dnsField: "dns_eaptls", authsrc: false, psk: false, cert: true, clientca: true, connKey: "connections_eaptls", beta: true }
+};
+
+function $(id) { return document.getElementById(id); }
+function esc(s) { s = String(s == null ? "" : s); var d = document.createElement("div"); d.textContent = s; return d.innerHTML; }
+
+function toast(msg) {
+    var t = $("toast");
+    t.textContent = msg;
+    t.className = "show";
+    clearTimeout(toast._t);
+    toast._t = setTimeout(function () { t.className = ""; }, 2200);
+}
+
+function post(params) {
+    return fetch(API, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams(params).toString() })
+        .then(function (r) { return r.json(); });
+}
+function getJSON(action) {
+    return fetch(API + "?action=" + action, { cache: "no-store" }).then(function (r) { return r.json(); });
+}
+
+// -------------------------------------------------------------- navigation
+
+function go(page) {
+    PAGE = page;
+    var items = document.querySelectorAll(".navitem");
+    for (var i = 0; i < items.length; i++) {
+        items[i].className = "navitem" + (items[i].getAttribute("data-nav") === page ? " active" : "");
+    }
+    var pages = { overview: "pg_overview", connections: "pg_connections", log: "pg_log", general: "pg_general", accounts: "pg_accounts",
+        mschapv2: "pg_server", psk: "pg_server", rsa: "pg_server", eaptls: "pg_server" };
+    var ids = ["pg_overview", "pg_connections", "pg_log", "pg_general", "pg_accounts", "pg_server"];
+    for (i = 0; i < ids.length; i++) $(ids[i]).className = "page hidden";
+    $(pages[page]).className = "page";
+
+    if (page === "connections") loadConnections();
+    else if (page === "log") loadEvents();
+    else if (SERVER_DEFS[page]) renderServerPage(page);
+    else if (page === "general") renderGeneral();
+    else if (page === "accounts") renderAccounts();
+}
+
+var navEls = document.querySelectorAll(".navitem");
+for (var ni = 0; ni < navEls.length; ni++) {
+    navEls[ni].onclick = (function (el) { return function () { go(el.getAttribute("data-nav")); }; })(navEls[ni]);
+}
+
+// -------------------------------------------------------------------- status
+
+function refresh() {
+    return getJSON("status").then(function (s) {
+        if (!s.success) { toast(t("status_query_failed")); return; }
+        STATE = s;
+        renderTop();
+        renderSidebarDots();
+        if (PAGE === "overview") renderOverview();
+        else if (PAGE === "general") renderGeneral();
+        else if (SERVER_DEFS[PAGE]) renderServerPage(PAGE);
+    }).catch(function () { toast(t("api_failed")); });
+}
+
+function renderTop() {
+    var s = STATE;
+    var running = s.enabled === "yes" && s.charon === "yes";
+    $("d_svc").className = "dot " + (running ? "ok" : "bad");
+    $("t_svc").textContent = s.enabled !== "yes" ? t("svc_stopped") : (s.charon === "yes" ? t("svc_running") : t("svc_daemon_stopped"));
+
+    var setupNotice = $("n_setup");
+    if (s.priv === "none") {
+        setupNotice.innerHTML = t("setup_notice", { cmd: esc(s.setup_cmd || "") });
+        setupNotice.className = "notice show";
+    } else {
+        setupNotice.className = "notice";
+    }
+
+    var daemonNotice = $("n_daemon");
+    if (s.enabled === "yes" && s.charon !== "yes") {
+        daemonNotice.innerHTML = t("daemon_notice");
+        daemonNotice.className = "notice show";
+    } else {
+        daemonNotice.className = "notice";
+    }
+
+    $("btn_svc_enable").disabled = s.enabled === "yes";
+    $("btn_svc_disable").disabled = s.enabled !== "yes";
+}
+
+function renderSidebarDots() {
+    var s = STATE;
+    var keys = { mschapv2: "mschapv2", psk: "psk_enabled", rsa: "rsa_enabled", eaptls: "eaptls_enabled" };
+    for (var k in keys) {
+        var on = s[keys[k]] === "yes";
+        $("d_srv_" + k).style.background = on ? "#54d17a" : "#d3d8dd";
+    }
+}
+
+// -------------------------------------------------------------------- overview
+
+function renderOverview() {
+    var s = STATE;
+    var methods = ["mschapv2", "psk", "rsa", "eaptls"];
+    var enFields = { mschapv2: "mschapv2", psk: "psk_enabled", rsa: "rsa_enabled", eaptls: "eaptls_enabled" };
+    var activeCount = 0, totalConn = 0;
+    methods.forEach(function (m) {
+        if (s[enFields[m]] === "yes") activeCount++;
+        totalConn += parseInt(s[SERVER_DEFS[m].connKey] || "0", 10) || 0;
+    });
+
+    $("s_active").innerHTML = activeCount + '<span class="unit">/ 4</span>';
+    $("s_conn").textContent = String(s.connections || totalConn || 0);
+    $("s_certs").textContent = String(s.certs || 0);
+    $("s_users").textContent = String(s.users || 0);
+    $("t_enabledcount").textContent = t("enabled_count", { n: activeCount });
+
+    var rows = "";
+    methods.forEach(function (m) {
+        var def = SERVER_DEFS[m];
+        var on = s[enFields[m]] === "yes";
+        var conn = parseInt(s[def.connKey] || "0", 10) || 0;
+        rows += '<div class="trow" style="grid-template-columns:1.5fr 1fr 1.4fr .9fr;cursor:pointer" data-go="' + m + '">'
+            + '<div style="display:flex;align-items:center;gap:10px">'
+            + '<span style="width:32px;height:32px;border-radius:8px;background:' + (on ? "var(--accent-bg)" : "#f2f4f6") + ';display:flex;align-items:center;justify-content:center;flex:none"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="' + (on ? "var(--accent)" : "#a7aeb4") + '" stroke-width="1.2"><rect x="2" y="2" width="12" height="4.5" rx="1"></rect><rect x="2" y="8" width="12" height="4.5" rx="1"></rect></svg></span>'
+            + '<span style="font-weight:600">' + esc(def.title) + '</span></div>'
+            + '<div><span class="badge2" style="background:' + (on ? "var(--ok-bg)" : "#f2f4f6") + ';color:' + (on ? "var(--ok)" : "var(--sub)") + '"><span class="d" style="background:' + (on ? "var(--ok)" : "var(--sub)") + '"></span>' + (on ? t("state_on") : t("state_off")) + '</span></div>'
+            + '<div style="color:#5b636b">' + (on ? esc(s[def.subnetField] || "-") : "-") + '</div>'
+            + '<div style="text-align:right;font-weight:600">' + (on ? conn : "-") + '</div>'
+            + '</div>';
+    });
+    $("ov_rows").innerHTML = rows;
+    var trs = $("ov_rows").querySelectorAll(".trow");
+    for (var i = 0; i < trs.length; i++) {
+        trs[i].onclick = (function (m) { return function () { go(m); }; })(trs[i].getAttribute("data-go"));
+    }
+
+    $("i_addr").textContent = s.hostname || s.cert_cn || "-";
+    $("i_iface").textContent = s.iface_name ? (s.iface_name + (s.iface_ip ? " (" + s.iface_ip + ")" : "")) : t("iface_none");
+    $("i_applied").textContent = s.last_applied || "-";
+}
+
+// -------------------------------------------------------------------- connections
+
+function loadConnections() {
+    $("conn_rows").innerHTML = '<div class="empty">' + esc(t("loading")) + '</div>';
+    getJSON("connections").then(function (list) {
+        if (!list || !list.length) {
+            $("conn_rows").innerHTML = '<div class="empty"><svg width="36" height="36" viewBox="0 0 16 16" fill="none" stroke="#cfd6dc" stroke-width="1.2"><path d="M5.5 1.5v3.5M10.5 1.5v3.5"></path><rect x="3.5" y="5" width="9" height="5.5" rx="1.5"></rect><path d="M8 10.5v4"></path></svg><div>' + esc(t("no_connections")) + '</div></div>';
+            return;
+        }
+        var rows = "";
+        list.forEach(function (c) {
+            rows += '<div class="trow" style="grid-template-columns:1.1fr 1.3fr 1.3fr 1fr .9fr">'
+                + '<div style="font-weight:600">' + esc(c.proto) + '</div>'
+                + '<div>' + esc(c.ip || "-") + '</div>'
+                + '<div>' + esc(c.virtual_ip || "-") + '</div>'
+                + '<div><span class="badge2" style="background:var(--ok-bg);color:var(--ok)"><span class="d" style="background:var(--ok)"></span>' + esc(c.state) + '</span></div>'
+                + '<div style="text-align:right"><button class="btn danger sm" data-conn="' + esc(c.conn) + '">' + esc(t("btn_disconnect")) + '</button></div>'
+                + '</div>';
+        });
+        $("conn_rows").innerHTML = rows;
+        var btns = $("conn_rows").querySelectorAll("button[data-conn]");
+        for (var i = 0; i < btns.length; i++) {
+            btns[i].onclick = function () {
+                var conn = this.getAttribute("data-conn");
+                if (!confirm(t("confirm_disconnect"))) return;
+                post({ action: "disconnect", conn: conn }).then(function (r) {
+                    toast(r.success ? t("disconnected_ok") : t("fail")); loadConnections(); refresh();
+                });
+            };
+        }
+    }).catch(function () { $("conn_rows").innerHTML = '<div class="empty">' + esc(t("load_failed")) + '</div>'; });
+}
+$("btn_conn_refresh").onclick = loadConnections;
+
+// -------------------------------------------------------------------- log
+
+var EVENTS_CACHE = [];
+function eventLabel(e) {
+    if (e === "established") return t("ev_established");
+    if (e === "auth_fail") return t("ev_authfail");
+    if (e === "disconnected") return t("ev_disconnected");
+    return e;
+}
+function eventDot(e) {
+    if (e === "established") return "var(--ok)";
+    if (e === "auth_fail") return "var(--bad)";
+    return "#9aa2a8";
+}
+function loadEvents() {
+    $("log_rows").innerHTML = '<div class="empty">' + esc(t("loading")) + '</div>';
+    getJSON("events").then(function (list) {
+        EVENTS_CACHE = list || [];
+        renderEvents();
+    }).catch(function () { $("log_rows").innerHTML = '<div class="empty">' + esc(t("load_failed")) + '</div>'; });
+}
+function renderEvents() {
+    var filter = $("f_log_proto").value;
+    var list = EVENTS_CACHE.filter(function (e) { return !filter || e.proto === filter; });
+    if (!list.length) {
+        $("log_rows").innerHTML = '<div class="empty">' + esc(t("no_events")) + '</div>';
+        return;
+    }
+    var rows = "";
+    for (var i = list.length - 1; i >= 0; i--) {
+        var e = list[i];
+        rows += '<div class="trow" style="grid-template-columns:1.3fr 1fr 1fr 2fr">'
+            + '<div style="color:#6b737b;font-variant-numeric:tabular-nums">' + esc(e.time) + '</div>'
+            + '<div style="color:#6b737b">' + esc(e.proto) + '</div>'
+            + '<div>' + esc(e.ip || "-") + '</div>'
+            + '<div style="display:flex;align-items:center;gap:7px"><span class="dot" style="background:' + eventDot(e.event) + '"></span>' + esc(eventLabel(e.event)) + '</div>'
+            + '</div>';
+    }
+    $("log_rows").innerHTML = rows;
+}
+$("f_log_proto").onchange = renderEvents;
+$("btn_log_clear").onclick = function () {
+    if (!confirm(t("confirm_clearlog"))) return;
+    post({ action: "eventsclear" }).then(function () { toast(t("cleared_ok")); loadEvents(); });
+};
+$("btn_log_export").onclick = function () { window.open(API + "?action=exportlog", "_blank"); };
+
+// -------------------------------------------------------------------- general
+
+function encLabel(v) {
+    if (v === "aes256") return t("enc_aes256");
+    if (v === "aes128") return t("enc_aes128");
+    return t("enc_auto_short");
+}
+function renderGeneral() {
+    var s = STATE; if (!s) return;
+    var busy = document.activeElement.tagName === "INPUT" || document.activeElement.tagName === "SELECT";
+
+    // rebuild the listen-interface dropdown from the detected interface list
+    // ("name:ip,name:ip"); keep the "all interfaces" option (value "") first.
+    if (!busy) {
+        var sel = $("g_iface"), cur = s.iface || "";
+        var opts = '<option value="">' + esc(t("opt_all_ifaces")) + '</option>';
+        var list = (s.iface_list || "").split(",");
+        var seen = false;
+        for (var i = 0; i < list.length; i++) {
+            if (!list[i]) continue;
+            var p = list[i].split(":"), nm = p[0], ip = p[1] || "";
+            opts += '<option value="' + esc(nm) + '">' + esc(nm) + (ip ? " (" + esc(ip) + ")" : "") + '</option>';
+            if (nm === cur) seen = true;
+        }
+        // selected interface no longer present (e.g. unplugged) - keep it visible
+        if (cur && !seen) opts += '<option value="' + esc(cur) + '">' + esc(cur) + ' ' + esc(t("iface_missing")) + '</option>';
+        sel.innerHTML = opts;
+        sel.value = cur;
+    }
+
+    if (!busy) {
+        $("g_hostname").value = s.hostname || "";
+        $("g_enc").value = s.enc || "auto";
+        $("g_autoblock").checked = s.autoblock === "yes";
+    }
+    $("g_iface_ro").textContent = s.iface_name ? (s.iface_name + (s.iface_ip ? " (" + s.iface_ip + ")" : "")) : t("iface_none");
+
+    var ab = $("n_dsmab");
+    if (s.dsm_autoblock === "no") {
+        ab.innerHTML = t("dsmab_off");
+        ab.className = "notice show";
+    } else {
+        ab.className = "notice";
+    }
+}
+$("btn_general_reset").onclick = function () { renderGeneral(); };
+$("btn_general_apply").onclick = function () {
+    post({
+        action: "save", scope: "general",
+        hostname: $("g_hostname").value.trim(), enc: $("g_enc").value,
+        iface: $("g_iface").value,
+        autoblock: $("g_autoblock").checked ? "yes" : "no"
+    }).then(function (r) {
+        if (!r.success) { toast(r.error || t("fail")); return; }
+        toast(t("settings_applied")); refresh();
+    });
+};
+
+// -------------------------------------------------------------------- accounts
+
+function renderAccounts() {
+    var s = STATE; if (!s) return;
+    var q = ($("a_search").value || "").toLowerCase();
+    var list = (s.user_list || []).filter(function (u) { return !q || u.toLowerCase().indexOf(q) !== -1; });
+    if (!list.length) {
+        $("acc_rows").innerHTML = '<div class="empty">' + esc(q ? t("no_search_results") : t("no_accounts")) + '</div>';
+        return;
+    }
+    var rows = "";
+    list.forEach(function (u) {
+        rows += '<div class="trow" style="grid-template-columns:2fr 1fr">'
+            + '<div style="display:flex;align-items:center;gap:10px"><span style="width:26px;height:26px;border-radius:50%;background:var(--accent-bg);color:var(--accent);display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700">' + esc(u.charAt(0).toUpperCase()) + '</span>' + esc(u) + '</div>'
+            + '<div style="text-align:right"><button class="btn danger sm" data-user="' + esc(u) + '">' + esc(t("btn_delete")) + '</button></div>'
+            + '</div>';
+    });
+    $("acc_rows").innerHTML = rows;
+    var btns = $("acc_rows").querySelectorAll("button[data-user]");
+    for (var i = 0; i < btns.length; i++) {
+        btns[i].onclick = function () {
+            var u = this.getAttribute("data-user");
+            if (!confirm(t("confirm_deluser", { user: u }))) return;
+            post({ action: "userdel", user: u }).then(function (r) { toast(r.success ? t("deleted_ok") : t("fail")); refresh().then(renderAccounts); });
+        };
+    }
+}
+$("a_search").oninput = renderAccounts;
+$("btn_user_add").onclick = function () {
+    var u = $("a_user").value.trim(), p = $("a_pass").value;
+    if (!u || !p) { toast(t("enter_userpass")); return; }
+    post({ action: "useradd", user: u, pass: p }).then(function (r) {
+        if (!r.success) { toast(r.error || t("fail")); return; }
+        $("a_user").value = ""; $("a_pass").value = "";
+        toast(t("account_added")); refresh().then(renderAccounts);
+    });
+};
+
+// -------------------------------------------------------------------- server pages
+
+function renderServerPage(m) {
+    var s = STATE; if (!s) return;
+    var def = SERVER_DEFS[m];
+    $("sv_title").textContent = def.title;
+    $("sv_enabled_label").textContent = t("server_enable_suffix", { title: def.title });
+    $("sv_beta_tag").className = "beta-tag" + (def.beta ? "" : " hidden");
+    $("n_beta").className = "notice" + (def.beta ? " show" : "");
+
+    if (document.activeElement.tagName !== "INPUT" && document.activeElement.tagName !== "SELECT") {
+        $("sv_enabled").checked = s[def.enField] === "yes";
+        $("sv_subnet").value = s[def.subnetField] || "";
+        $("sv_dns").value = s[def.dnsField] || "";
+        if (def.authsrc) $("sv_authsrc").value = s.mschapv2_auth === "dsm" ? "dsm" : "local";
+        if (def.psk) $("sv_psk").value = "";
+    }
+    $("sv_psk").placeholder = s.psk ? t("psk_set") : t("ph_psk_auto");
+
+    $("row_authsrc").className = "form-row" + (def.authsrc ? "" : " hidden");
+    $("row_psk").className = "form-row" + (def.psk ? "" : " hidden");
+    $("row_cert").className = "form-row" + (def.cert ? "" : " hidden");
+    $("row_clientca").className = "form-row" + (def.clientca ? "" : " hidden");
+
+    if (def.cert) {
+        $("sv_cert_ro").textContent = (s.cert_cn || "-") + (s.cert_self_signed === "yes" ? t("selfsigned_suffix") : "");
+    }
+    if (def.clientca) {
+        $("sv_clientca_ro").textContent = s.clientca_cn || t("clientca_notissued");
+    }
+    $("sv_enc_ro").textContent = encLabel(s.enc);
+    $("sv_enc_link").onclick = function (e) { e.preventDefault(); go("general"); };
+
+    var radius = $("n_radius");
+    if (def.authsrc && $("sv_authsrc").value === "dsm") {
+        var n = (typeof s.dsm_accounts !== "undefined") ? parseInt(s.dsm_accounts, 10) : NaN;
+        radius.innerHTML = t("radius_notice_main") + (!isNaN(n) ? t("radius_notice_count", { n: n }) : "");
+        radius.className = "notice show";
+    } else {
+        radius.className = "notice";
+    }
+
+    // profile downloads
+    var profButtons = { mschapv2: ["ios", "windows", "android", "ca"], psk: ["ios_psk", "ca"], rsa: ["ca"], eaptls: ["ca"] };
+    var labels = { ios: "iOS / macOS", windows: "Windows", android: t("prof_android"), ios_psk: "iOS / macOS (PSK)", ca: t("prof_ca") };
+    var pb = $("profile_buttons");
+    pb.innerHTML = "";
+    (profButtons[m] || []).forEach(function (type) {
+        var b = document.createElement("button");
+        b.className = "btn sm"; b.textContent = labels[type];
+        b.onclick = function () { downloadProfile(type); };
+        pb.appendChild(b);
+    });
+    $("card_profiles").className = "card" + (profButtons[m] && profButtons[m].length ? "" : " hidden");
+
+    // client cert issuance (rsa / eaptls)
+    $("card_certs").className = "card" + (def.clientca ? "" : " hidden");
+    if (def.clientca) renderCerts();
+}
+
+function downloadProfile(type) {
+    var f = $("f_download");
+    f.action = API; f.innerHTML = "";
+    function hidden(name, val) { var i = document.createElement("input"); i.type = "hidden"; i.name = name; i.value = val; f.appendChild(i); }
+    hidden("action", "profile"); hidden("type", type);
+    f.submit();
+}
+
+$("sv_authsrc").onchange = function () { renderServerPage(PAGE); };
+$("btn_server_reset").onclick = function () { renderServerPage(PAGE); };
+$("btn_server_apply").onclick = function () {
+    var def = SERVER_DEFS[PAGE];
+    var params = {
+        action: "save", scope: PAGE,
+        enabled: $("sv_enabled").checked ? "yes" : "no",
+        subnet: $("sv_subnet").value.trim(),
+        dns: $("sv_dns").value.trim()
+    };
+    if (def.authsrc) params.auth_source = $("sv_authsrc").value;
+    if (def.psk) params.psk = $("sv_psk").value;
+    post(params).then(function (r) {
+        if (!r.success) { toast(r.error || t("fail")); return; }
+        toast(t("settings_applied")); refresh();
+    });
+};
+
+function renderCerts() {
+    getJSON("status").then(function (s) {
+        var list = s.cert_list || [];
+        if (!list.length) { $("cert_rows").innerHTML = '<div class="empty">' + esc(t("no_certs")) + '</div>'; return; }
+        var rows = "";
+        list.forEach(function (c) {
+            rows += '<div class="trow" style="grid-template-columns:1.6fr 1.4fr .8fr">'
+                + '<div>' + esc(c.name) + '</div><div>' + esc(c.expires || "-") + '</div>'
+                + '<div style="text-align:right"><button class="btn danger sm" data-cert="' + esc(c.name) + '">' + esc(t("btn_delete")) + '</button></div>'
+                + '</div>';
+        });
+        $("cert_rows").innerHTML = rows;
+        var btns = $("cert_rows").querySelectorAll("button[data-cert]");
+        for (var i = 0; i < btns.length; i++) {
+            btns[i].onclick = function () {
+                var n = this.getAttribute("data-cert");
+                if (!confirm(t("confirm_delcert", { name: n }))) return;
+                post({ action: "certdel", user: n }).then(function (r) { toast(r.success ? t("deleted_ok") : t("fail")); renderCerts(); refresh(); });
+            };
+        }
+    });
+}
+$("btn_cert_issue").onclick = function () {
+    var name = $("c_name").value.trim(), pass = $("c_pass").value;
+    if (!name || !pass) { toast(t("enter_namepass")); return; }
+    var f = $("f_download");
+    f.action = API; f.innerHTML = "";
+    function hidden(k, v) { var i = document.createElement("input"); i.type = "hidden"; i.name = k; i.value = v; f.appendChild(i); }
+    hidden("action", "certissue"); hidden("user", name); hidden("p12pass", pass);
+    f.submit();
+    setTimeout(function () { renderCerts(); refresh(); }, 1500);
+};
+
+// -------------------------------------------------------------------- init
+
+$("btn_svc_enable").onclick = function () {
+    post({ action: "enable" }).then(function (r) {
+        if (!r.success) { toast(r.error || t("enable_failed")); return; }
+        toast(t("enabled_ok")); refresh();
+    });
+};
+$("btn_svc_disable").onclick = function () {
+    if (!confirm(t("confirm_disable"))) return;
+    post({ action: "disable" }).then(function () { toast(t("disabled_ok")); refresh(); });
+};
+
+$("btn_refresh").onclick = refresh;
+applyStaticI18n();
+go("overview");
+refresh();
+setInterval(refresh, 15000);
+</script>
+</body>
+</html>

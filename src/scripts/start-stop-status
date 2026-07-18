@@ -1,0 +1,44 @@
+#!/bin/sh
+# IKEv2VPN start-stop-status (runs as the package user on DSM 7).
+# Delegates to ikev2ctl apply/remove, which start/stop our own bundled
+# charon daemon directly (no VPNCenter dependency).
+PKG_DIR="/var/packages/${SYNOPKG_PKGNAME:-IKEv2VPN}"
+TARGET="${SYNOPKG_PKGDEST:-${PKG_DIR}/target}"
+AS="${TARGET}/bin/asroot"
+ETC="${PKG_DIR}/etc"
+VAR="${PKG_DIR}/var"
+
+case "$1" in
+    start)
+        mkdir -p "$VAR"
+        touch "${VAR}/pkg_running"
+        # re-apply only when the VPN was enabled from the management UI.
+        # apply loads kernel modules, (re)starts charon and installs NAT -
+        # do it in the background so a slow/at-boot apply (module loads,
+        # vici socket wait, network not fully up yet) never stalls the DSM
+        # package-start sequence. Soft-fail so the package still starts
+        # before ikev2-setup was run.
+        if [ -f "${ETC}/enabled" ]; then
+            ( "$AS" ikev2ctl apply >/dev/null 2>&1 || \
+                echo "IKEv2 apply skipped: run 'sudo ${TARGET}/bin/ikev2-setup install' from SSH" ) &
+        fi
+        exit 0
+        ;;
+    stop)
+        "$AS" ikev2ctl remove >/dev/null 2>&1 || true
+        rm -f "${VAR}/pkg_running"
+        exit 0
+        ;;
+    status)
+        # 0: running, 3: stopped
+        [ -f "${VAR}/pkg_running" ] && exit 0
+        exit 3
+        ;;
+    log)
+        echo "${PKG_DIR}/var/ikev2.log"
+        exit 0
+        ;;
+    *)
+        exit 0
+        ;;
+esac

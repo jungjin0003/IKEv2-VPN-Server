@@ -1,0 +1,3 @@
+#!/bin/sh
+# IKEv2VPN preinst
+exit 0

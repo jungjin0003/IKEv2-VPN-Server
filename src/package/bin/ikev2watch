@@ -1,0 +1,346 @@
+#!/bin/sh
+# ikev2watch - IKEv2 log watcher: structured connection event log (used by
+# the management UI's "로그" page) + optional DSM Auto Block integration.
+#
+# Parses our own bundled charon's log (${VAR}/charon.log, written by the
+# filelog plugin per the strongswan.conf ikev2ctl generates) for
+# authentication successes/failures/disconnects, always recording a
+# structured event log (${VAR}/events.log) regardless of the auto-block
+# setting. When IKEV2_AUTOBLOCK=yes, also counts failures per source IP
+# using DSM's own auto-block threshold settings (Control Panel > Security >
+# Protection) and registers offenders in the DSM auto-block DB
+# (/etc/synoautoblock.db). Registration only - enforcement is left
+# entirely to DSM.
+#
+# usage: ikev2watch start|stop|run|status
+
+PKG="IKEv2VPN"
+PKG_DIR="/var/packages/${PKG}"
+ETC="${PKG_DIR}/etc"
+VAR="${PKG_DIR}/var"
+LOG="${VAR}/ikev2.log"
+CHARON_LOG="${VAR}/charon.log"
+SETTINGS="${ETC}/settings.conf"
+PIDFILE="${VAR}/ikev2watch.pid"
+FAILDB="${VAR}/authfail.list"
+OFFSET_FILE="${VAR}/logoffset/charon.log"
+# id->peer-IP map, persisted ACROSS scan passes. charon only prints the
+# client IP in "x.x.x.x[port]" form on the early packets (received packet /
+# IKE_SA_INIT); the later "established"/"deleted" lines carry the IP only in
+# "[identity]" form or not at all - so without remembering the IP per IKE_SA
+# id between passes, connect/disconnect events would be dropped (which is
+# exactly why the UI 로그 page only ever showed auth failures).
+ADDR_STATE="${VAR}/logoffset/ikeaddr"
+ADDR_MAX_LINES=500
+EVENTS_LOG="${VAR}/events.log"
+EVENTS_MAX_LINES=2000
+
+AB_DB="/etc/synoautoblock.db"
+INTERVAL=20
+
+IKEV2_AUTOBLOCK="no"
+read_pkg_settings() {
+    IKEV2_AUTOBLOCK="no"
+    [ -f "$SETTINGS" ] && . "$SETTINGS"
+}
+
+log() {
+    mkdir -p "$VAR"
+    echo "$(date '+%Y-%m-%d %H:%M:%S') [watch] $*" >> "$LOG"
+}
+
+find_sqlite() {
+    for b in /bin/sqlite3 /usr/bin/sqlite3 /usr/syno/bin/sqlite3; do
+        [ -x "$b" ] && { echo "$b"; return 0; }
+    done
+    command -v sqlite3 2>/dev/null
+}
+
+# ------------------------------------------------- DSM auto-block settings
+
+# defaults mirror DSM's own defaults
+AB_ENABLE="unknown"
+AB_ATTEMPTS=10
+AB_WITHIN_SEC=300
+AB_EXPIRE_DAY=0
+
+read_ab_settings() {
+    WEBAPI="/usr/syno/bin/synowebapi"
+    [ -x "$WEBAPI" ] || return 0
+    J=$("$WEBAPI" --exec api=SYNO.Core.Security.AutoBlock method=get version=1 2>/dev/null)
+    [ -n "$J" ] || return 0
+    case "$J" in
+        *'"enable"'*true*|*'"enable":true'*) AB_ENABLE="yes" ;;
+        *'"enable"'*false*) AB_ENABLE="no" ;;
+    esac
+    A=$(printf '%s' "$J" | sed -n 's/.*"attempts"[^0-9]*\([0-9]\+\).*/\1/p')
+    W=$(printf '%s' "$J" | sed -n 's/.*"within_mins"[^0-9]*\([0-9]\+\).*/\1/p')
+    E=$(printf '%s' "$J" | sed -n 's/.*"expire_day"[^0-9]*\([0-9]\+\).*/\1/p')
+    [ -n "$A" ] && AB_ATTEMPTS="$A"
+    [ -n "$W" ] && AB_WITHIN_SEC=$((W * 60))
+    [ -n "$E" ] && AB_EXPIRE_DAY="$E"
+}
+
+# ------------------------------------------------------------ block DB ops
+
+ipstd() {
+    # 1.2.3.4 -> 0000:0000:0000:0000:0000:FFFF:0102:0304
+    printf '%s' "$1" | awk -F. \
+        '{printf "0000:0000:0000:0000:0000:FFFF:%02X%02X:%02X%02X", $1, $2, $3, $4}'
+}
+
+whitelist_table() {
+    SQLITE=$(find_sqlite); [ -n "$SQLITE" ] || return 1
+    "$SQLITE" "$AB_DB" "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE '%White%';" 2>/dev/null | head -n 1
+}
+
+is_whitelisted() {
+    WT=$(whitelist_table) || return 1
+    [ -n "$WT" ] || return 1
+    SQLITE=$(find_sqlite)
+    N=$("$SQLITE" "$AB_DB" "SELECT COUNT(*) FROM ${WT} WHERE IP='$1';" 2>/dev/null)
+    [ "$N" -gt 0 ] 2>/dev/null
+}
+
+db_block() {
+    IP="$1"
+    SQLITE=$(find_sqlite)
+    [ -n "$SQLITE" ] && [ -f "$AB_DB" ] || return 1
+    NOW=$(date +%s)
+    if [ "$AB_EXPIRE_DAY" -gt 0 ] 2>/dev/null; then
+        EXP=$((NOW + AB_EXPIRE_DAY * 86400))
+    else
+        EXP=0
+    fi
+    STD=$(ipstd "$IP")
+    # only use columns that exist in this DSM version's schema
+    COLS=$("$SQLITE" "$AB_DB" "PRAGMA table_info(AutoBlockIP);" 2>/dev/null | cut -d'|' -f2)
+    C="IP,RecordTime,ExpireTime,Deny"
+    V="'$IP',$NOW,$EXP,1"
+    if printf '%s\n' "$COLS" | grep -qx "IPStd"; then
+        C="$C,IPStd"; V="$V,'$STD'"
+    fi
+    if printf '%s\n' "$COLS" | grep -qx "Type"; then
+        C="$C,Type"; V="$V,0"
+    fi
+    if printf '%s\n' "$COLS" | grep -qx "Meta"; then
+        C="$C,Meta"; V="$V,''"
+    fi
+    "$SQLITE" "$AB_DB" "INSERT OR REPLACE INTO AutoBlockIP ($C) VALUES ($V);" 2>/dev/null
+}
+
+denied_ips() {
+    SQLITE=$(find_sqlite)
+    [ -n "$SQLITE" ] && [ -f "$AB_DB" ] || return 0
+    NOW=$(date +%s)
+    "$SQLITE" "$AB_DB" \
+        "SELECT IP FROM AutoBlockIP WHERE Deny=1 AND (ExpireTime=0 OR ExpireTime>$NOW);" 2>/dev/null \
+        | grep -E '^([0-9]{1,3}\.){3}[0-9]{1,3}$'
+}
+
+# ------------------------------------------------------------ log scanning
+#
+# Single pass over new lines appended to our own bundled charon's log
+# (${CHARON_LOG}, filelog plugin, format fixed by the strongswan.conf
+# ikev2ctl generates: "%Y-%m-%d %H:%M:%S <lvl>[<sub>] <connname|N> ...").
+# On a recognized event, both (a) appends a structured
+# "time|proto|user|event|ip" line to EVENTS_LOG for the UI's 로그 page and
+# (b) echoes bare failure IPs to stdout for the auto-block counter.
+
+scan_ike_log() {
+    mkdir -p "$(dirname "$OFFSET_FILE")"
+    [ -f "$CHARON_LOG" ] || return 0
+    NOW_STR=$(date '+%Y-%m-%d %H:%M:%S')
+    OLD=$(cat "$OFFSET_FILE" 2>/dev/null); [ -n "$OLD" ] || OLD=0
+    SIZE=$(wc -c < "$CHARON_LOG" 2>/dev/null); [ -n "$SIZE" ] || SIZE=0
+    # log rotated / truncated
+    [ "$SIZE" -lt "$OLD" ] && OLD=0
+    echo "$SIZE" > "$OFFSET_FILE"
+    [ "$SIZE" -le "$OLD" ] && return 0
+
+    ADDR_TMP="${ADDR_STATE}.tmp"
+    tail -c +"$((OLD + 1))" "$CHARON_LOG" 2>/dev/null | awk -v now="$NOW_STR" -v ev="$EVENTS_LOG" \
+        -v astate="$ADDR_STATE" -v astateout="$ADDR_TMP" '
+    function connname(cn) {
+        if (cn == "ikev2") return "MSCHAPv2"
+        if (cn == "ikev2-psk") return "PSK"
+        if (cn == "ikev2-rsa") return "RSA"
+        if (cn == "ikev2-eaptls") return "EAP-TLS"
+        return cn
+    }
+    BEGIN {
+        # restore the id->ip map learned in previous passes
+        while ((getline line < astate) > 0) {
+            n = split(line, a, "\t")
+            if (n >= 2 && a[1] != "") addr[a[1]] = a[2]
+        }
+        close(astate)
+    }
+    {
+        if (!match($0, /<[^|>]*\|[0-9]+>/)) next
+        id = substr($0, RSTART, RLENGTH); gsub(/[<>]/, "", id)   # "conn|N"
+        cn = id; sub(/\|.*/, "", cn)                             # "conn"
+
+        # learn/refresh this IKE_SA id peer IP from whatever form is present:
+        #  (a) "x.x.x.x[port]"      - on received-packet / IKE_SA_INIT lines
+        if (match($0, /[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+\[[0-9]+\]/)) {
+            s = substr($0, RSTART, RLENGTH); sub(/\[.*/, "", s)
+            if (s != "127.0.0.1") addr[id] = s
+        }
+        #  (b) "...x.x.x.x" (the remote side of "between LOCAL...REMOTE") -
+        #      appears on IKE_SA established / deleting lines
+        if (match($0, /\.\.\.[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/)) {
+            s = substr($0, RSTART, RLENGTH); sub(/^\.\.\./, "", s)
+            if (s != "127.0.0.1") addr[id] = s
+        }
+
+        ip = (id in addr) ? addr[id] : ""
+
+        if ($0 ~ /verification failed|authentication failed|EAP_FAILURE|no shared key found|constraint check failed|AUTHENTICATION_FAILED|received AUTHENTICATION_FAILED/) {
+            if (ip != "") { print ip; printf "%s|%s|-|auth_fail|%s\n", now, connname(cn), ip >> ev }
+        } else if ($0 ~ /IKE_SA .* established/) {
+            if (ip != "" && !(id in est)) { est[id] = 1; printf "%s|%s|-|established|%s\n", now, connname(cn), ip >> ev }
+        } else if ($0 ~ /IKE_SA .* deleted/) {
+            if (ip != "") printf "%s|%s|-|disconnected|%s\n", now, connname(cn), ip >> ev
+            delete addr[id]   # SA gone - stop tracking so the map stays bounded
+        }
+    }
+    END {
+        printf "" > astateout          # always (re)create, even if map is empty
+        for (k in addr) print k "\t" addr[k] >> astateout
+        close(astateout)
+    }'
+    # commit the refreshed id->ip map
+    if [ -f "$ADDR_TMP" ]; then
+        # safety cap so a flood of never-deleted SAs cannot grow it unbounded
+        LN=$(wc -l < "$ADDR_TMP" 2>/dev/null); [ -n "$LN" ] || LN=0
+        if [ "$LN" -gt "$ADDR_MAX_LINES" ]; then
+            tail -n "$ADDR_MAX_LINES" "$ADDR_TMP" > "${ADDR_TMP}.2" && mv "${ADDR_TMP}.2" "$ADDR_TMP"
+        fi
+        mv "$ADDR_TMP" "$ADDR_STATE"
+    fi
+
+    # cap events.log so it cannot grow without bound
+    if [ -f "$EVENTS_LOG" ]; then
+        LN=$(wc -l < "$EVENTS_LOG" 2>/dev/null); [ -n "$LN" ] || LN=0
+        if [ "$LN" -gt "$EVENTS_MAX_LINES" ]; then
+            tail -n "$EVENTS_MAX_LINES" "$EVENTS_LOG" > "${EVENTS_LOG}.tmp" \
+                && mv "${EVENTS_LOG}.tmp" "$EVENTS_LOG"
+        fi
+    fi
+}
+
+# kept as a thin wrapper: existing callers just want the failure IP stream
+scan_failures() { scan_ike_log; }
+
+record_failures() {
+    # scan_ike_log() always runs (writes events.log for the UI's 로그 page);
+    # only register with DSM auto-block when the package setting is on.
+    NOW=$(date +%s)
+    NEW=$(scan_failures)
+    [ "$IKEV2_AUTOBLOCK" = "yes" ] && [ "$AB_ENABLE" != "no" ] || return 0
+    [ -n "$NEW" ] || { prune_faildb; return 0; }
+
+    touch "$FAILDB"
+    for ip in $NEW; do
+        echo "$NOW $ip" >> "$FAILDB"
+    done
+    prune_faildb
+
+    # block offenders that reached DSM's threshold
+    for ip in $(printf '%s\n' "$NEW" | sort -u); do
+        CNT=$(grep -c " ${ip}\$" "$FAILDB" 2>/dev/null)
+        [ "$CNT" -ge "$AB_ATTEMPTS" ] 2>/dev/null || continue
+        if is_whitelisted "$ip"; then
+            log "threshold reached but $ip is in DSM allow list - skipped"
+            continue
+        fi
+        if db_block "$ip"; then
+            log "auto-blocked $ip (${CNT} failed attempts within ${AB_WITHIN_SEC}s, DSM threshold ${AB_ATTEMPTS})"
+            sed -i "/ ${ip}\$/d" "$FAILDB" 2>/dev/null
+        fi
+    done
+}
+
+prune_faildb() {
+    [ -f "$FAILDB" ] || return 0
+    NOW=$(date +%s)
+    LIMIT=$((NOW - AB_WITHIN_SEC))
+    awk -v l="$LIMIT" '$1 >= l' "$FAILDB" > "${FAILDB}.tmp" 2>/dev/null \
+        && mv "${FAILDB}.tmp" "$FAILDB"
+}
+
+# ---------------------------------------------------------------- lifecycle
+
+is_running() {
+    P=$(cat "$PIDFILE" 2>/dev/null)
+    [ -n "$P" ] && kill -0 "$P" 2>/dev/null
+}
+
+do_run() {
+    echo $$ > "$PIDFILE"
+    log "watcher started (pid $$)"
+    T=0
+    while :; do
+        # refresh DSM + package settings every ~5 min
+        if [ "$T" -le 0 ]; then
+            read_ab_settings
+            read_pkg_settings
+            T=300
+        fi
+        # always runs: writes events.log for the UI's 로그 page, and (only
+        # when IKEV2_AUTOBLOCK=yes and DSM auto-block is enabled) registers
+        # offenders in DSM's auto-block DB
+        record_failures
+        sleep "$INTERVAL"
+        T=$((T - INTERVAL))
+    done
+}
+
+do_start() {
+    is_running && return 0
+    mkdir -p "$VAR"
+    nohup "$0" run >/dev/null 2>&1 &
+    log "watcher launching"
+}
+
+do_stop() {
+    P=$(cat "$PIDFILE" 2>/dev/null)
+    if [ -n "$P" ]; then
+        kill "$P" 2>/dev/null
+        rm -f "$PIDFILE"
+    fi
+    log "watcher stopped"
+}
+
+do_status() {
+    if is_running; then echo "watcher=yes"; else echo "watcher=no"; fi
+    [ -f "$AB_DB" ] && echo "autoblock_db=yes" || echo "autoblock_db=no"
+    read_ab_settings
+    echo "dsm_autoblock=${AB_ENABLE}"
+    N=$(denied_ips | wc -l | tr -d ' ')
+    echo "blocked_count=${N}"
+}
+
+do_events() {
+    [ -f "$EVENTS_LOG" ] || return 0
+    tail -n "${1:-200}" "$EVENTS_LOG"
+}
+
+do_events_clear() {
+    : > "$EVENTS_LOG" 2>/dev/null
+    log "event log cleared"
+}
+
+case "$1" in
+    start)        do_start ;;
+    stop)         do_stop ;;
+    run)          do_run ;;
+    status)       do_status ;;
+    events)       do_events "$2" ;;
+    events-clear) do_events_clear ;;
+    *)
+        echo "usage: $0 start|stop|run|status|events|events-clear" >&2
+        exit 1
+        ;;
+esac

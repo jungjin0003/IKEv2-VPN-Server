@@ -1,0 +1,111 @@
+#!/bin/sh
+# ikev2-setup - one-time root delegation setup for DSM 7.2
+#
+# DSM 7.2 does not allow unsigned third-party packages to run as root
+# (conf/privilege run-as root blocks installation), and the DSM
+# capability mechanism (privilege "tool" -> "capabilities") only takes
+# effect on ELF binaries - the kernel ignores file capabilities on
+# shell scripts, which is all this noarch package ships.
+#
+# This script therefore installs a narrow sudoers rule that lets the
+# package user run the three package control tools as root. Run it once
+# after installing (and optionally after upgrading) the package:
+#
+#   sudo /var/packages/IKEv2VPN/target/bin/ikev2-setup install
+#
+# usage: ikev2-setup install|remove|status
+
+PKG="IKEv2VPN"
+PKG_DIR="/var/packages/${PKG}"
+TARGET="${PKG_DIR}/target"
+SUDOERS="/etc/sudoers.d/ikev2vpn"
+TOOLS="ikev2ctl ikev2watch genprofile"
+# must match conf/privilege "username" - DSM's package user for this pkg
+PKG_USER_DEFAULT="sc-ikev2vpn"
+
+die() {
+    echo "ERROR: $*" >&2
+    exit 1
+}
+
+pkg_user() {
+    U=$(stat -c '%U' "$TARGET" 2>/dev/null)
+    [ -n "$U" ] && [ "$U" != "root" ] || U="$PKG_USER_DEFAULT"
+    echo "$U"
+}
+
+do_install() {
+    [ "$(id -u)" = "0" ] || die "must run as root: sudo $0 install"
+    [ -d "$TARGET" ] || die "package not installed (${TARGET} missing)"
+
+    U=$(pkg_user)
+    id "$U" >/dev/null 2>&1 || die "package user '${U}' not found"
+
+    if ! grep -Eq '^[#@]?includedir[[:space:]]+/etc/sudoers.d' /etc/sudoers 2>/dev/null; then
+        echo "WARN: /etc/sudoers does not include /etc/sudoers.d - the rule may not take effect" >&2
+    fi
+
+    CMDS=""
+    for t in $TOOLS; do
+        [ -f "${TARGET}/bin/${t}" ] || die "missing tool: ${TARGET}/bin/${t}"
+        CMDS="${CMDS}${CMDS:+, }${TARGET}/bin/${t}"
+    done
+
+    TMP="${SUDOERS}.tmp.$$"
+    {
+        echo "# ${PKG} package - allow the package user to run its control tools as root."
+        echo "# Installed by ${TARGET}/bin/ikev2-setup - remove with 'ikev2-setup remove'."
+        echo "Defaults:${U} !requiretty"
+        echo "${U} ALL=(root) NOPASSWD: ${CMDS}"
+    } > "$TMP"
+    chmod 440 "$TMP"
+
+    if command -v visudo >/dev/null 2>&1; then
+        visudo -c -f "$TMP" >/dev/null 2>&1 || { rm -f "$TMP"; die "generated sudoers rule failed validation"; }
+    fi
+    mv -f "$TMP" "$SUDOERS"
+
+    # lock the tools so the package user cannot modify what root executes
+    for t in $TOOLS asroot ikev2-setup; do
+        chown root:root "${TARGET}/bin/${t}" 2>/dev/null
+        chmod 755 "${TARGET}/bin/${t}" 2>/dev/null
+    done
+
+    echo "OK: sudo rule installed for user '${U}' (${SUDOERS})"
+
+    # If the VPN was already enabled before (e.g. this is a re-run after a
+    # package upgrade, or the user enabled it before running setup), apply
+    # right now so the daemon + kernel modules + NAT come up without needing
+    # another manual step. Otherwise tell them to enable it in the UI.
+    if [ -f "/var/packages/IKEv2VPN/etc/enabled" ]; then
+        echo "VPN was previously enabled - applying now..."
+        "${TARGET}/bin/ikev2ctl" apply && echo "OK: IKEv2 VPN applied." \
+            || echo "WARN: apply reported an error - check /var/packages/IKEv2VPN/var/ikev2.log"
+    else
+        echo "Open the IKEv2 VPN Server window in DSM and click 'Enable' to apply the VPN config."
+    fi
+}
+
+do_remove() {
+    [ "$(id -u)" = "0" ] || die "must run as root: sudo $0 remove"
+    rm -f "$SUDOERS"
+    echo "OK: sudo rule removed"
+}
+
+do_status() {
+    if [ -f "$SUDOERS" ]; then
+        echo "sudoers=installed"
+    else
+        echo "sudoers=missing"
+    fi
+}
+
+case "$1" in
+    install) do_install ;;
+    remove)  do_remove ;;
+    status)  do_status ;;
+    *)
+        echo "usage: $0 install|remove|status" >&2
+        exit 1
+        ;;
+esac

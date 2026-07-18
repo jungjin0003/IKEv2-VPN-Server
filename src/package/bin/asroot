@@ -1,0 +1,37 @@
+#!/bin/sh
+# asroot <tool> [args...] - run a package tool with root privilege.
+#
+# DSM 7.2 refuses to install unsigned packages that request run-as root,
+# so the package itself runs as the package user. Privileged operations
+# (starting/stopping the bundled charon daemon, writing its config,
+# auto-block DB writes) go through the sudo rule installed once by
+# 'ikev2-setup install'.
+#
+# exit 78 (EX_CONFIG): no privilege path available - setup not done yet.
+
+PKG_DIR="/var/packages/IKEv2VPN"
+TARGET="${PKG_DIR}/target"
+
+TOOL="$1"
+[ $# -ge 1 ] && shift
+case "$TOOL" in
+    ikev2ctl|ikev2watch|genprofile) ;;
+    *)
+        echo "usage: $0 ikev2ctl|ikev2watch|genprofile [args...]" >&2
+        exit 1
+        ;;
+esac
+CMD="${TARGET}/bin/${TOOL}"
+
+# already privileged (root, or effective capabilities that allow the work)
+if [ "$(id -u)" = "0" ]; then
+    exec "$CMD" "$@"
+fi
+
+# sudo rule installed by ikev2-setup
+if command -v sudo >/dev/null 2>&1 && sudo -n -l "$CMD" >/dev/null 2>&1; then
+    exec sudo -n "$CMD" "$@"
+fi
+
+echo "IKEV2_ERR_NEED_SETUP: run 'sudo ${TARGET}/bin/ikev2-setup install' from an SSH shell first" >&2
+exit 78

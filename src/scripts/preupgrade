@@ -1,0 +1,9 @@
+#!/bin/sh
+# IKEv2VPN preupgrade - keep settings/accounts across upgrades
+PKG_DIR="/var/packages/${SYNOPKG_PKGNAME:-IKEv2VPN}"
+BACKUP="/tmp/${SYNOPKG_PKGNAME:-IKEv2VPN}.upgrade"
+
+rm -rf "$BACKUP"
+mkdir -p "$BACKUP"
+[ -d "${PKG_DIR}/etc" ] && cp -a "${PKG_DIR}/etc" "$BACKUP/"
+exit 0

@@ -1,0 +1,20 @@
+#!/bin/sh
+# IKEv2VPN postinst - prepare runtime directories and default settings
+PKG_DIR="/var/packages/${SYNOPKG_PKGNAME:-IKEv2VPN}"
+TARGET="${SYNOPKG_PKGDEST:-${PKG_DIR}/target}"
+ETC="${PKG_DIR}/etc"
+VAR="${PKG_DIR}/var"
+
+mkdir -p "$ETC" "$VAR"
+
+# Install default settings only when not present (keep user data on reinstall)
+if [ ! -f "${ETC}/settings.conf" ] && [ -f "${TARGET}/etc.defaults/settings.conf" ]; then
+    cp "${TARGET}/etc.defaults/settings.conf" "${ETC}/settings.conf"
+fi
+[ -f "${ETC}/users.conf" ] || : > "${ETC}/users.conf"
+chmod 600 "${ETC}/users.conf" 2>/dev/null
+
+# Ensure executables are runnable regardless of how the spk was built
+chmod 755 "${TARGET}/bin/"* "${TARGET}/ui/"*.cgi 2>/dev/null
+
+exit 0

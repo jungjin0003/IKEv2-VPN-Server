@@ -1,0 +1,9 @@
+#!/bin/sh
+# IKEv2VPN preuninst - stop the bundled charon daemon
+PKG_DIR="/var/packages/${SYNOPKG_PKGNAME:-IKEv2VPN}"
+TARGET="${SYNOPKG_PKGDEST:-${PKG_DIR}/target}"
+
+if [ -x "${TARGET}/bin/asroot" ]; then
+    "${TARGET}/bin/asroot" ikev2ctl remove || true
+fi
+exit 0

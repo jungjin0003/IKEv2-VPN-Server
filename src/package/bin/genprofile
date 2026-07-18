@@ -1,0 +1,352 @@
+#!/bin/sh
+# genprofile - generate IKEv2 client profiles on stdout
+# usage: genprofile ios|windows|android [username]
+
+PKG="IKEv2VPN"
+PKG_DIR="/var/packages/${PKG}"
+ETC="${PKG_DIR}/etc"
+CERT_DIR="${ETC}/cert"
+SETTINGS="${ETC}/settings.conf"
+
+IKEV2_SUBNET="10.9.0.0/24"
+IKEV2_DNS1="8.8.8.8"
+IKEV2_DNS2=""
+IKEV2_HOSTNAME=""
+[ -f "$SETTINGS" ] && . "$SETTINGS"
+
+TYPE="$1"
+VPN_USER="$2"
+
+IKEV2_ENABLE_PSK="${IKEV2_ENABLE_PSK:-no}"
+IKEV2_PSK="${IKEV2_PSK:-}"
+
+cert_cn() {
+    openssl x509 -in "$1" -noout -subject 2>/dev/null \
+        | sed -n 's/.*CN[ ]*=[ ]*\([^,/]*\).*/\1/p' | head -n 1
+}
+
+SERVER="$IKEV2_HOSTNAME"
+if [ -z "$SERVER" ] && [ -f "${CERT_DIR}/server-cert.pem" ]; then
+    SERVER=$(cert_cn "${CERT_DIR}/server-cert.pem")
+fi
+[ -n "$SERVER" ] || SERVER="your-nas.example.com"
+
+SELF_SIGNED="no"
+[ -f "${CERT_DIR}/self-signed" ] && SELF_SIGNED="yes"
+
+CA_B64=""
+if [ "$SELF_SIGNED" = "yes" ] && [ -f "${CERT_DIR}/ca.pem" ]; then
+    # DER + base64 (no PEM armor) for embedding in profiles
+    CA_B64=$(openssl x509 -in "${CERT_DIR}/ca.pem" -outform DER 2>/dev/null | openssl base64 -A 2>/dev/null)
+fi
+
+uuid() {
+    U=$(cat /proc/sys/kernel/random/uuid 2>/dev/null)
+    [ -n "$U" ] || U=$(openssl rand -hex 16 \
+        | sed 's/^\(........\)\(....\)\(....\)\(....\)\(............\)$/\1-\2-\3-\4-\5/')
+    printf '%s' "$U" | tr 'a-f' 'A-F'
+}
+
+gen_ios() {
+    U1=$(uuid); U2=$(uuid); U3=$(uuid); U4=$(uuid)
+    cat <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>PayloadContent</key>
+    <array>
+        <dict>
+            <key>IKEv2</key>
+            <dict>
+                <key>AuthenticationMethod</key>
+                <string>None</string>
+                <key>ExtendedAuthEnabled</key>
+                <true/>
+EOF
+    if [ -n "$VPN_USER" ]; then
+        cat <<EOF
+                <key>AuthName</key>
+                <string>${VPN_USER}</string>
+                <key>LocalIdentifier</key>
+                <string>${VPN_USER}</string>
+EOF
+    fi
+    cat <<EOF
+                <key>RemoteAddress</key>
+                <string>${SERVER}</string>
+                <key>RemoteIdentifier</key>
+                <string>${SERVER}</string>
+                <key>ServerCertificateCommonName</key>
+                <string>${SERVER}</string>
+                <key>DeadPeerDetectionRate</key>
+                <string>Medium</string>
+                <key>DisableMOBIKE</key>
+                <integer>0</integer>
+                <key>DisableRedirect</key>
+                <integer>1</integer>
+                <key>EnablePFS</key>
+                <integer>0</integer>
+                <key>UseConfigurationAttributeInternalIPSubnet</key>
+                <integer>0</integer>
+                <key>IKESecurityAssociationParameters</key>
+                <dict>
+                    <key>EncryptionAlgorithm</key>
+                    <string>AES-256</string>
+                    <key>IntegrityAlgorithm</key>
+                    <string>SHA2-256</string>
+                    <key>DiffieHellmanGroup</key>
+                    <integer>14</integer>
+                    <key>LifeTimeInMinutes</key>
+                    <integer>1440</integer>
+                </dict>
+                <key>ChildSecurityAssociationParameters</key>
+                <dict>
+                    <key>EncryptionAlgorithm</key>
+                    <string>AES-256</string>
+                    <key>IntegrityAlgorithm</key>
+                    <string>SHA2-256</string>
+                    <key>DiffieHellmanGroup</key>
+                    <integer>14</integer>
+                    <key>LifeTimeInMinutes</key>
+                    <integer>1440</integer>
+                </dict>
+            </dict>
+            <key>PayloadDisplayName</key>
+            <string>IKEv2 VPN (${SERVER})</string>
+            <key>PayloadIdentifier</key>
+            <string>com.synology.ikev2vpn.vpn.${U2}</string>
+            <key>PayloadType</key>
+            <string>com.apple.vpn.managed</string>
+            <key>PayloadUUID</key>
+            <string>${U2}</string>
+            <key>PayloadVersion</key>
+            <integer>1</integer>
+            <key>UserDefinedName</key>
+            <string>IKEv2 VPN (${SERVER})</string>
+            <key>VPNType</key>
+            <string>IKEv2</string>
+        </dict>
+EOF
+    if [ -n "$CA_B64" ]; then
+        cat <<EOF
+        <dict>
+            <key>PayloadCertificateFileName</key>
+            <string>ikev2-ca.cer</string>
+            <key>PayloadContent</key>
+            <data>${CA_B64}</data>
+            <key>PayloadDisplayName</key>
+            <string>IKEv2 VPN CA (${SERVER})</string>
+            <key>PayloadIdentifier</key>
+            <string>com.synology.ikev2vpn.ca.${U3}</string>
+            <key>PayloadType</key>
+            <string>com.apple.security.root</string>
+            <key>PayloadUUID</key>
+            <string>${U3}</string>
+            <key>PayloadVersion</key>
+            <integer>1</integer>
+        </dict>
+EOF
+    fi
+    cat <<EOF
+    </array>
+    <key>PayloadDisplayName</key>
+    <string>IKEv2 VPN (${SERVER})</string>
+    <key>PayloadIdentifier</key>
+    <string>com.synology.ikev2vpn.${U1}</string>
+    <key>PayloadRemovalDisallowed</key>
+    <false/>
+    <key>PayloadType</key>
+    <string>Configuration</string>
+    <key>PayloadUUID</key>
+    <string>${U1}</string>
+    <key>PayloadVersion</key>
+    <integer>1</integer>
+</dict>
+</plist>
+EOF
+}
+
+gen_ios_psk() {
+    U1=$(uuid); U2=$(uuid); U3=$(uuid)
+    cat <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>PayloadContent</key>
+    <array>
+        <dict>
+            <key>IKEv2</key>
+            <dict>
+                <key>AuthenticationMethod</key>
+                <string>SharedSecret</string>
+                <key>SharedSecret</key>
+                <string>${IKEV2_PSK}</string>
+                <key>LocalIdentifier</key>
+                <string>vpn-client</string>
+                <key>RemoteAddress</key>
+                <string>${SERVER}</string>
+                <key>RemoteIdentifier</key>
+                <string>${SERVER}</string>
+                <key>DeadPeerDetectionRate</key>
+                <string>Medium</string>
+                <key>DisableMOBIKE</key>
+                <integer>0</integer>
+                <key>DisableRedirect</key>
+                <integer>1</integer>
+                <key>EnablePFS</key>
+                <integer>0</integer>
+                <key>IKESecurityAssociationParameters</key>
+                <dict>
+                    <key>EncryptionAlgorithm</key>
+                    <string>AES-256</string>
+                    <key>IntegrityAlgorithm</key>
+                    <string>SHA2-256</string>
+                    <key>DiffieHellmanGroup</key>
+                    <integer>14</integer>
+                    <key>LifeTimeInMinutes</key>
+                    <integer>1440</integer>
+                </dict>
+                <key>ChildSecurityAssociationParameters</key>
+                <dict>
+                    <key>EncryptionAlgorithm</key>
+                    <string>AES-256</string>
+                    <key>IntegrityAlgorithm</key>
+                    <string>SHA2-256</string>
+                    <key>DiffieHellmanGroup</key>
+                    <integer>14</integer>
+                    <key>LifeTimeInMinutes</key>
+                    <integer>1440</integer>
+                </dict>
+            </dict>
+            <key>PayloadDisplayName</key>
+            <string>IKEv2 VPN PSK (${SERVER})</string>
+            <key>PayloadIdentifier</key>
+            <string>com.synology.ikev2vpn.psk.${U2}</string>
+            <key>PayloadType</key>
+            <string>com.apple.vpn.managed</string>
+            <key>PayloadUUID</key>
+            <string>${U2}</string>
+            <key>PayloadVersion</key>
+            <integer>1</integer>
+            <key>UserDefinedName</key>
+            <string>IKEv2 VPN PSK (${SERVER})</string>
+            <key>VPNType</key>
+            <string>IKEv2</string>
+        </dict>
+    </array>
+    <key>PayloadDisplayName</key>
+    <string>IKEv2 VPN PSK (${SERVER})</string>
+    <key>PayloadIdentifier</key>
+    <string>com.synology.ikev2vpn.${U1}</string>
+    <key>PayloadRemovalDisallowed</key>
+    <false/>
+    <key>PayloadType</key>
+    <string>Configuration</string>
+    <key>PayloadUUID</key>
+    <string>${U1}</string>
+    <key>PayloadVersion</key>
+    <integer>1</integer>
+</dict>
+</plist>
+EOF
+}
+
+gen_windows() {
+    cat <<EOF
+# IKEv2 VPN connection setup for Windows 10/11
+# Run in an elevated (Administrator) PowerShell:
+#   powershell -ExecutionPolicy Bypass -File .\\ikev2-vpn.ps1
+
+\$Server = "${SERVER}"
+\$Name   = "IKEv2 VPN (${SERVER})"
+
+EOF
+    if [ -n "$CA_B64" ]; then
+        cat <<EOF
+# --- trust the server's self-signed certificate (required) ---
+\$caB64 = "${CA_B64}"
+\$caPath = Join-Path \$env:TEMP "ikev2-ca.cer"
+[IO.File]::WriteAllBytes(\$caPath, [Convert]::FromBase64String(\$caB64))
+Import-Certificate -FilePath \$caPath -CertStoreLocation Cert:\\LocalMachine\\Root | Out-Null
+Remove-Item \$caPath -Force
+Write-Host "CA certificate imported into LocalMachine\\Root"
+
+EOF
+    fi
+    cat <<'EOF'
+if (Get-VpnConnection -Name $Name -ErrorAction SilentlyContinue) {
+    Remove-VpnConnection -Name $Name -Force
+}
+
+Add-VpnConnection -Name $Name `
+    -ServerAddress $Server `
+    -TunnelType IKEv2 `
+    -AuthenticationMethod EAP `
+    -EncryptionLevel Required `
+    -RememberCredential `
+    -PassThru | Out-Null
+
+# use strong IPsec proposals matching the server
+Set-VpnConnectionIPsecConfiguration -ConnectionName $Name `
+    -AuthenticationTransformConstants SHA256128 `
+    -CipherTransformConstants AES256 `
+    -EncryptionMethod AES256 `
+    -IntegrityCheckMethod SHA256 `
+    -DHGroup Group14 `
+    -PfsGroup None `
+    -Force
+
+Write-Host "VPN connection '$Name' created."
+Write-Host "Connect with your IKEv2 VPN username/password (Settings > Network > VPN)."
+EOF
+}
+
+gen_android() {
+    cat <<EOF
+[Android IKEv2 VPN setup guide]
+
+Android 11 or later (built-in IKEv2 client):
+  1. Settings > Network & internet > VPN > Add
+  2. Type: IKEv2/IPSec MSCHAPv2
+  3. Server address: ${SERVER}
+  4. IPSec identifier (Remote ID): ${SERVER}
+  5. Username / password: an account created in the IKEv2 VPN admin page
+
+strongSwan app (recommended, all Android versions):
+  1. Install "strongSwan VPN Client" from the Play Store
+  2. Add a profile:
+     - Server: ${SERVER}
+     - VPN type: IKEv2 EAP (username/password)
+     - Username / password: your IKEv2 VPN account
+EOF
+    if [ "$SELF_SIGNED" = "yes" ]; then
+        cat <<EOF
+
+* Note: this server uses a self-signed certificate.
+  Download the CA certificate (ikev2-ca.cer) from the DSM admin page,
+  install it on your phone (trust it as a CA), then connect.
+EOF
+    fi
+}
+
+gen_ca() {
+    if [ -f "${CERT_DIR}/ca.pem" ]; then
+        openssl x509 -in "${CERT_DIR}/ca.pem" -outform DER 2>/dev/null
+    else
+        return 1
+    fi
+}
+
+case "$TYPE" in
+    ios|mac|macos) gen_ios ;;
+    ios-psk)       gen_ios_psk ;;
+    windows)       gen_windows ;;
+    android)       gen_android ;;
+    ca)            gen_ca ;;
+    *)
+        echo "usage: $0 ios|ios-psk|windows|android|ca [username]" >&2
+        exit 1
+        ;;
+esac

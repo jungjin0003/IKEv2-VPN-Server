@@ -1,0 +1,12 @@
+#!/bin/sh
+# IKEv2VPN postupgrade - restore settings/accounts
+PKG_DIR="/var/packages/${SYNOPKG_PKGNAME:-IKEv2VPN}"
+BACKUP="/tmp/${SYNOPKG_PKGNAME:-IKEv2VPN}.upgrade"
+
+if [ -d "${BACKUP}/etc" ]; then
+    mkdir -p "${PKG_DIR}"
+    rm -rf "${PKG_DIR}/etc"
+    cp -a "${BACKUP}/etc" "${PKG_DIR}/etc"
+    rm -rf "$BACKUP"
+fi
+exit 0

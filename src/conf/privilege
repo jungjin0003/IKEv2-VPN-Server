@@ -1,0 +1,7 @@
+{
+    "defaults": {
+        "run-as": "package"
+    },
+    "username": "sc-ikev2vpn",
+    "groupname": "sc-ikev2vpn"
+}

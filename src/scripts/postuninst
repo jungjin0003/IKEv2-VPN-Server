@@ -1,0 +1,5 @@
+#!/bin/sh
+# IKEv2VPN postuninst - clean runtime data
+PKG_DIR="/var/packages/${SYNOPKG_PKGNAME:-IKEv2VPN}"
+rm -rf "${PKG_DIR}/etc" "${PKG_DIR}/var" 2>/dev/null
+exit 0
