@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+﻿#!/usr/bin/env bash
 #
 # Unified build script for the IKEv2VPN Synology package (.spk).
 #
@@ -100,7 +100,12 @@ build_strongswan() {
 	log "Downloading strongSwan source ($_url)"
 	curl -fL --retry 3 -o "$_dl" "$_url"
 
-	_first="$(tar tjf "$_dl" | head -n 1)"
+	# Capture the whole listing rather than `tar tjf | head -n1`: under
+	# `set -o pipefail`, head closing the pipe early makes tar exit via
+	# SIGPIPE, which aborts the whole script right after the download (this
+	# was a real bug - build.sh appeared to "only download and stop").
+	_listing="$(tar tjf "$_dl")"
+	_first="${_listing%%$'\n'*}"
 	_dirname="${_first%%/*}"
 	_ver="${_dirname#strongswan-}"
 	_srcdir="$ROOT/build/$_dirname"
@@ -110,11 +115,12 @@ build_strongswan() {
 	tar xjf "$_dl" -C "$ROOT/build"
 	rm -f "$_dl"
 
-	log "Configuring strongSwan"
+	SS_CFLAGS="${CFLAGS:-} -march=x86-64 -O2"
+	log "Configuring strongSwan (CFLAGS: $SS_CFLAGS)"
 	(
 		cd "$_srcdir"
 		make distclean >/dev/null 2>&1 || true
-		./configure \
+		CFLAGS="$SS_CFLAGS" ./configure \
 			--prefix="$PREFIX" \
 			--sysconfdir="$SYSCONFDIR" \
 			--with-swanctldir="$SWANCTLDIR" \
