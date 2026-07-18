@@ -6,6 +6,10 @@ A package for running an IKEv2 VPN Server on Synology NAS devices.
 
 A third-party package that adds a standalone IKEv2/IPsec VPN server to Synology DSM, powered by a pre-compiled strongSwan bundled inside the package.
 
+## Preview
+
+![IKEv2 VPN Server overview](docs/images/overview.png)
+
 ## Supported NAS platforms
 - DSM 7.2 or later
 - NAS models using the x86_64 architecture

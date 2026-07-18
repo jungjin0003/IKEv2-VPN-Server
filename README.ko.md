@@ -6,6 +6,10 @@ Synology NAS 기기에서 IKEv2 VPN Server를 사용하기 위한 패키지입�
 
 Synology DSM에 독립형 IKEv2/IPsec VPN 서버를 추가하는 서드파티 패키지로, 패키지에 내장된 사전 컴파일된 strongSwan을 사용합니다.
 
+## 미리보기
+
+![IKEv2 VPN Server 메인 화면](docs/images/overview.png)
+
 ## 지원 NAS 플랫폼
 - DSM 7.2 이상
 - x86_64 아키텍처를 사용하는 NAS
