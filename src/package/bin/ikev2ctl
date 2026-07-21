@@ -64,6 +64,7 @@ CHARON_PID="${VAR}/charon.pid"
 CHARON_VICI="${VAR}/charon.vici"
 
 SYNO_CERT_DIR="/usr/syno/etc/certificate/system/default"
+SYNO_CERT_ARCHIVE="/usr/syno/etc/certificate/_archive"
 # must match conf/privilege "username" - DSM's package user for this pkg
 PKG_USER_DEFAULT="sc-ikev2vpn"
 
@@ -220,9 +221,12 @@ load_settings() {
     IKEV2_AUTOBLOCK="no"
     IKEV2_IFACE=""                # "" = listen on all interfaces; else iface name
 
+    # IKEV2_CERT_* = chosen DSM certificate archive id ("" = system default);
+    # the server presents that certificate to clients
     IKEV2_ENABLE_MSCHAPV2="no"    # EAP-MSCHAPv2, DSM accounts only (권한 allowlist)
     IKEV2_SUBNET_MSCHAPV2="10.10.0.0/24"
     IKEV2_DNS_MSCHAPV2="8.8.8.8"
+    IKEV2_CERT_MSCHAPV2=""
 
     IKEV2_ENABLE_PSK="no"
     IKEV2_PSK=""
@@ -232,10 +236,12 @@ load_settings() {
     IKEV2_ENABLE_RSA="no"
     IKEV2_SUBNET_RSA="10.12.0.0/24"
     IKEV2_DNS_RSA="8.8.8.8"
+    IKEV2_CERT_RSA=""
 
     IKEV2_ENABLE_EAPTLS="no"
     IKEV2_SUBNET_EAPTLS="10.13.0.0/24"
     IKEV2_DNS_EAPTLS="8.8.8.8"
+    IKEV2_CERT_EAPTLS=""
 
     [ -f "$SETTINGS" ] && . "$SETTINGS"
 }
@@ -252,48 +258,162 @@ get_leftid() {
 }
 
 # ----------------------------------------------------------------- server cert
+#
+# Each cert-based VPN server (mschapv2/rsa/eaptls) presents a certificate the
+# user picked from DSM's certificate store (IKEV2_CERT_<scope> = archive id;
+# "" = DSM system default). Only when DSM has no usable certificate at all is a
+# single temporary self-signed cert generated so the service can still start.
+
+# best-effort description for a DSM archive cert id, from the archive INFO json
+dsm_cert_desc() {
+    [ -f "${SYNO_CERT_ARCHIVE}/INFO" ] || return 0
+    sed 's/},/}\n/g' "${SYNO_CERT_ARCHIVE}/INFO" 2>/dev/null \
+        | grep "\"$1\"" \
+        | sed -n 's/.*"desc"[^"]*"\([^"]*\)".*/\1/p' | head -n 1
+}
+
+# list installable DSM certificates as "id|label" (label = desc, else CN)
+dsm_cert_list() {
+    [ -d "$SYNO_CERT_ARCHIVE" ] || return 0
+    for d in "$SYNO_CERT_ARCHIVE"/*/; do
+        _cid=$(basename "$d")
+        [ "$_cid" = "*" ] && continue
+        [ -f "${d}cert.pem" ] && [ -f "${d}privkey.pem" ] || continue
+        _lbl=$(dsm_cert_desc "$_cid")
+        [ -n "$_lbl" ] || _lbl=$(cert_cn "${d}cert.pem")
+        [ -n "$_lbl" ] || _lbl="$_cid"
+        printf '%s|%s\n' "$_cid" "$_lbl"
+    done
+}
+
+# archive id of DSM's default certificate (from _archive/DEFAULT, else whatever
+# the system/default slot links to); empty if it can't be determined
+dsm_cert_default() {
+    _d=""
+    [ -f "${SYNO_CERT_ARCHIVE}/DEFAULT" ] && _d=$(head -n1 "${SYNO_CERT_ARCHIVE}/DEFAULT" 2>/dev/null | tr -d ' \t\r\n')
+    if [ -z "$_d" ] && [ -L "$SYNO_CERT_DIR" ]; then
+        _d=$(basename "$(readlink -f "$SYNO_CERT_DIR" 2>/dev/null)" 2>/dev/null)
+    fi
+    [ -n "$_d" ] && [ -f "${SYNO_CERT_ARCHIVE}/${_d}/cert.pem" ] && printf '%s\n' "$_d"
+}
+
+# resolve a selected cert id to a source dir: a valid archive id -> its dir;
+# empty id -> DSM's default certificate; otherwise the system default slot;
+# otherwise the first available archive cert. Prints the dir (return 0), or
+# returns 1 when DSM has no usable cert at all.
+dsm_cert_src() {
+    _id="$1"
+    [ -n "$_id" ] || _id=$(dsm_cert_default)
+    if [ -n "$_id" ] && [ -f "${SYNO_CERT_ARCHIVE}/${_id}/cert.pem" ] && [ -f "${SYNO_CERT_ARCHIVE}/${_id}/privkey.pem" ]; then
+        printf '%s\n' "${SYNO_CERT_ARCHIVE}/${_id}"; return 0
+    fi
+    if [ -f "${SYNO_CERT_DIR}/cert.pem" ] && [ -f "${SYNO_CERT_DIR}/privkey.pem" ]; then
+        printf '%s\n' "$SYNO_CERT_DIR"; return 0
+    fi
+    for d in "$SYNO_CERT_ARCHIVE"/*/; do
+        [ -f "${d}cert.pem" ] && [ -f "${d}privkey.pem" ] && { printf '%s\n' "${d%/}"; return 0; }
+    done
+    return 1
+}
+
+# generate the shared temporary self-signed cert (only when DSM has none),
+# using the system openssl inside DSM
+ensure_temp_cert() {
+    [ -f "${CERT_DIR}/temp-cert.pem" ] && [ -f "${CERT_DIR}/temp-key.pem" ] && return 0
+    _cn="$IKEV2_HOSTNAME"
+    [ -n "$_cn" ] || _cn=$(hostname 2>/dev/null)
+    [ -n "$_cn" ] || _cn="ikev2-vpn"
+    mkdir -p "$CERT_DIR"
+    umask 077
+    # -addext needs openssl >= 1.1.1 (DSM 7.2); fall back to a plain
+    # self-signed cert if this openssl is older.
+    openssl req -x509 -new -nodes -newkey rsa:2048 -sha256 \
+        -keyout "${CERT_DIR}/temp-key.pem" -out "${CERT_DIR}/temp-cert.pem" \
+        -days 825 -subj "/CN=${_cn}" \
+        -addext "subjectAltName=DNS:${_cn}" \
+        -addext "extendedKeyUsage=serverAuth" >/dev/null 2>&1 \
+    || openssl req -x509 -new -nodes -newkey rsa:2048 -sha256 \
+        -keyout "${CERT_DIR}/temp-key.pem" -out "${CERT_DIR}/temp-cert.pem" \
+        -days 825 -subj "/CN=${_cn}" >/dev/null 2>&1 \
+    || fail "temporary certificate generation failed"
+    chmod 600 "${CERT_DIR}/temp-key.pem"
+    log "no DSM certificate available; generated temporary self-signed cert (CN=${_cn})"
+}
+
+# install the certificate for one cert-based scope into swanctl.
+#   $1 = scope (mschapv2|rsa|eaptls), $2 = selected DSM cert id
+# Produces x509/server-cert-<scope>.pem, private/server-key-<scope>.pem,
+# x509ca/server-chain-<scope>.pem (CA chain / self-signed), and records
+# CERT_DIR/<scope>.leftid, <scope>.selfsigned, <scope>.temporary.
+install_server_cert() {
+    _scope="$1"; _cid="$2"
+    _crt="${SWANCTL_ETC}/x509/server-cert-${_scope}.pem"
+    _key="${SWANCTL_ETC}/private/server-key-${_scope}.pem"
+    _chain="${SWANCTL_ETC}/x509ca/server-chain-${_scope}.pem"
+    mkdir -p "${SWANCTL_ETC}/x509" "${SWANCTL_ETC}/private" "${SWANCTL_ETC}/x509ca" "$CERT_DIR"
+
+    _src=$(dsm_cert_src "$_cid") || _src=""
+    if [ -n "$_src" ]; then
+        cp -f "${_src}/cert.pem"    "$_crt"
+        cp -f "${_src}/privkey.pem" "$_key"
+        rm -f "${CERT_DIR}/${_scope}.temporary"
+    else
+        ensure_temp_cert
+        cp -f "${CERT_DIR}/temp-cert.pem" "$_crt"
+        cp -f "${CERT_DIR}/temp-key.pem"  "$_key"
+        : > "${CERT_DIR}/${_scope}.temporary"
+    fi
+    chmod 600 "$_key"
+
+    # CA chain the server presents: intermediate/root from the source dir, or
+    # the cert itself when self-signed (so clients can be told to trust it)
+    rm -f "$_chain" "${CERT_DIR}/${_scope}.selfsigned"
+    if [ -n "$_src" ] && [ -s "${_src}/chain.pem" ]; then
+        cp -f "${_src}/chain.pem" "$_chain"
+    elif [ -n "$_src" ] && [ -s "${_src}/fullchain.pem" ]; then
+        awk 'BEGIN{n=0} /BEGIN CERTIFICATE/{n++} n>=2{print}' "${_src}/fullchain.pem" > "$_chain"
+        [ -s "$_chain" ] || rm -f "$_chain"
+    fi
+    _sh=$(openssl x509 -in "$_crt" -noout -subject_hash 2>/dev/null)
+    _ih=$(openssl x509 -in "$_crt" -noout -issuer_hash 2>/dev/null)
+    if [ -n "$_sh" ] && [ "$_sh" = "$_ih" ]; then
+        cp -f "$_crt" "$_chain"
+        echo "yes" > "${CERT_DIR}/${_scope}.selfsigned"
+    fi
+
+    # IKE identity presented to clients: configured hostname, else the cert CN
+    _lid="$IKEV2_HOSTNAME"
+    [ -n "$_lid" ] || _lid=$(cert_cn "$_crt")
+    [ -n "$_lid" ] || _lid=$(hostname)
+    printf '%s\n' "$_lid" > "${CERT_DIR}/${_scope}.leftid"
+}
 
 install_cert() {
-    [ -f "${SYNO_CERT_DIR}/cert.pem" ]    || fail "system default certificate not found (${SYNO_CERT_DIR})"
-    [ -f "${SYNO_CERT_DIR}/privkey.pem" ] || fail "system default private key not found"
+    mkdir -p "$CERT_DIR" "${SWANCTL_ETC}/x509" "${SWANCTL_ETC}/private" "${SWANCTL_ETC}/x509ca"
 
-    mkdir -p "$CERT_DIR"
-    cp -f "${SYNO_CERT_DIR}/cert.pem"    "${CERT_DIR}/server-cert.pem"
-    cp -f "${SYNO_CERT_DIR}/privkey.pem" "${CERT_DIR}/server-key.pem"
+    # drop pre-per-scope files so swanctl doesn't auto-load a stale server key
+    rm -f "${SWANCTL_ETC}/x509/server-cert.pem" "${SWANCTL_ETC}/private/server-key.pem" \
+          "${SWANCTL_ETC}/x509ca/server-chain-ca.pem" 2>/dev/null
+
+    # per cert-based server: install its chosen DSM certificate (or temp)
+    install_server_cert mschapv2 "$IKEV2_CERT_MSCHAPV2"
+    install_server_cert rsa      "$IKEV2_CERT_RSA"
+    install_server_cert eaptls   "$IKEV2_CERT_EAPTLS"
+
+    # canonical set used by client-profile generation, get_leftid and status -
+    # mirrors the MSCHAPv2 (primary) server's certificate
+    cp -f "${SWANCTL_ETC}/x509/server-cert-mschapv2.pem"  "${CERT_DIR}/server-cert.pem"
+    cp -f "${SWANCTL_ETC}/private/server-key-mschapv2.pem" "${CERT_DIR}/server-key.pem"
     chmod 600 "${CERT_DIR}/server-key.pem"
-
-    # intermediate / root chain (if any)
-    rm -f "${CERT_DIR}/ca.pem"
-    if [ -s "${SYNO_CERT_DIR}/chain.pem" ]; then
-        cp -f "${SYNO_CERT_DIR}/chain.pem" "${CERT_DIR}/ca.pem"
-    elif [ -s "${SYNO_CERT_DIR}/fullchain.pem" ]; then
-        awk 'BEGIN{n=0} /BEGIN CERTIFICATE/{n++} n>=2{print}' \
-            "${SYNO_CERT_DIR}/fullchain.pem" > "${CERT_DIR}/ca.pem"
-        [ -s "${CERT_DIR}/ca.pem" ] || rm -f "${CERT_DIR}/ca.pem"
-    fi
-
-    # self-signed cert: it is its own CA (clients must trust it)
-    SUBJ_HASH=$(openssl x509 -in "${CERT_DIR}/server-cert.pem" -noout -subject_hash 2>/dev/null)
-    ISSU_HASH=$(openssl x509 -in "${CERT_DIR}/server-cert.pem" -noout -issuer_hash 2>/dev/null)
-    if [ -n "$SUBJ_HASH" ] && [ "$SUBJ_HASH" = "$ISSU_HASH" ]; then
-        cp -f "${CERT_DIR}/server-cert.pem" "${CERT_DIR}/ca.pem"
-        echo "yes" > "${CERT_DIR}/self-signed"
+    if [ -f "${SWANCTL_ETC}/x509ca/server-chain-mschapv2.pem" ]; then
+        cp -f "${SWANCTL_ETC}/x509ca/server-chain-mschapv2.pem" "${CERT_DIR}/ca.pem"
     else
-        rm -f "${CERT_DIR}/self-signed"
+        rm -f "${CERT_DIR}/ca.pem"
     fi
+    [ -f "${CERT_DIR}/mschapv2.selfsigned" ] && echo "yes" > "${CERT_DIR}/self-signed" || rm -f "${CERT_DIR}/self-signed"
+    [ -f "${CERT_DIR}/mschapv2.temporary" ]  && : > "${CERT_DIR}/temporary" || rm -f "${CERT_DIR}/temporary"
 
-    # swanctl's cert-loading convention: end-entity cert under x509/,
-    # private key under private/, CA certs (server chain + client CA)
-    # under x509ca/
-    mkdir -p "${SWANCTL_ETC}/x509" "${SWANCTL_ETC}/private" "${SWANCTL_ETC}/x509ca"
-    cp -f "${CERT_DIR}/server-cert.pem" "${SWANCTL_ETC}/x509/server-cert.pem"
-    cp -f "${CERT_DIR}/server-key.pem"  "${SWANCTL_ETC}/private/server-key.pem"
-    chmod 600 "${SWANCTL_ETC}/private/server-key.pem"
-    if [ -f "${CERT_DIR}/ca.pem" ]; then
-        cp -f "${CERT_DIR}/ca.pem" "${SWANCTL_ETC}/x509ca/server-chain-ca.pem"
-    else
-        rm -f "${SWANCTL_ETC}/x509ca/server-chain-ca.pem" 2>/dev/null
-    fi
+    # client CA (for RSA / EAP-TLS remote pubkey auth)
     if [ "$IKEV2_ENABLE_RSA" = "yes" ] || [ "$IKEV2_ENABLE_EAPTLS" = "yes" ]; then
         ensure_client_ca
         cp -f "${CLIENTCA_DIR}/ca.pem" "${SWANCTL_ETC}/x509ca/clientca.pem"
@@ -515,11 +635,29 @@ dsm_users_list() {
     done
 }
 
+# resolvers the NAS itself uses - pushed to clients when a server is set to
+# "automatic DNS" (its stored DNS value is empty). Comma-separated, up to 3;
+# falls back to a public resolver if /etc/resolv.conf has none.
+server_dns() {
+    _d=$(awk '/^[Nn]ameserver[ \t]/ && $2 ~ /^[0-9]+(\.[0-9]+){3}$/ {a=a (a?",":"") $2; n++} n>=3{exit} END{print a}' /etc/resolv.conf 2>/dev/null)
+    [ -n "$_d" ] && printf '%s\n' "$_d" || printf '8.8.8.8\n'
+}
+
+# effective DNS for a pool: the stored value if set (manual DNS), otherwise
+# the NAS's own resolvers (automatic DNS).
+pool_dns() { [ -n "$1" ] && printf '%s\n' "$1" || server_dns; }
+
 # render ${ETC}/swanctl/swanctl.conf - connection/pool/secret definitions,
 # loaded live via 'swanctl --load-all' (no daemon restart needed)
 render_swanctl_conf() {
     get_leftid
     mkdir -p "$SWANCTL_ETC"
+
+    # per-scope IKE identity = CN of that server's chosen certificate (written
+    # by install_server_cert); fall back to the global leftid
+    LEFTID_MSCHAPV2=$(cat "${CERT_DIR}/mschapv2.leftid" 2>/dev/null); [ -n "$LEFTID_MSCHAPV2" ] || LEFTID_MSCHAPV2="$LEFTID"
+    LEFTID_RSA=$(cat "${CERT_DIR}/rsa.leftid" 2>/dev/null);           [ -n "$LEFTID_RSA" ]      || LEFTID_RSA="$LEFTID"
+    LEFTID_EAPTLS=$(cat "${CERT_DIR}/eaptls.leftid" 2>/dev/null);     [ -n "$LEFTID_EAPTLS" ]   || LEFTID_EAPTLS="$LEFTID"
 
     # local_addrs = concrete interface IP(s), never the literal %any (which
     # this fragile kernel dislikes when combined with charon route/vip
@@ -549,8 +687,8 @@ render_swanctl_conf() {
         pools = pool-ikev2
         local {
             auth = pubkey
-            certs = server-cert.pem
-            id = \"${LEFTID}\"
+            certs = server-cert-mschapv2.pem
+            id = \"${LEFTID_MSCHAPV2}\"
         }
         remote {
             auth = ${RAUTH}
@@ -566,9 +704,10 @@ render_swanctl_conf() {
         }
     }"
         POOLS="${POOLS}
-    pool-ikev2 { addrs = ${IKEV2_SUBNET_MSCHAPV2}, dns = ${IKEV2_DNS_MSCHAPV2} }"
+    pool-ikev2 { addrs = ${IKEV2_SUBNET_MSCHAPV2}, dns = $(pool_dns "$IKEV2_DNS_MSCHAPV2") }"
 
         SECRETS="${SECRETS}
+    private-server-mschapv2 { file = server-key-mschapv2.pem }
 $(dsm_ntlm_secrets)"
     fi
 
@@ -600,7 +739,7 @@ $(dsm_ntlm_secrets)"
         }
     }"
         POOLS="${POOLS}
-    pool-ikev2-psk { addrs = ${IKEV2_SUBNET_PSK}, dns = ${IKEV2_DNS_PSK} }"
+    pool-ikev2-psk { addrs = ${IKEV2_SUBNET_PSK}, dns = $(pool_dns "$IKEV2_DNS_PSK") }"
         PSKESC=$(printf '%s' "$IKEV2_PSK" | sed 's/"/\\"/g')
         SECRETS="${SECRETS}
     ike-psk { secret = \"${PSKESC}\" }"
@@ -620,8 +759,8 @@ $(dsm_ntlm_secrets)"
         pools = pool-ikev2-rsa
         local {
             auth = pubkey
-            certs = server-cert.pem
-            id = \"${LEFTID}\"
+            certs = server-cert-rsa.pem
+            id = \"${LEFTID_RSA}\"
         }
         remote {
             auth = pubkey
@@ -637,7 +776,9 @@ $(dsm_ntlm_secrets)"
         }
     }"
         POOLS="${POOLS}
-    pool-ikev2-rsa { addrs = ${IKEV2_SUBNET_RSA}, dns = ${IKEV2_DNS_RSA} }"
+    pool-ikev2-rsa { addrs = ${IKEV2_SUBNET_RSA}, dns = $(pool_dns "$IKEV2_DNS_RSA") }"
+        SECRETS="${SECRETS}
+    private-server-rsa { file = server-key-rsa.pem }"
     fi
 
     if [ "$IKEV2_ENABLE_EAPTLS" = "yes" ]; then
@@ -654,8 +795,8 @@ $(dsm_ntlm_secrets)"
         pools = pool-ikev2-eaptls
         local {
             auth = pubkey
-            certs = server-cert.pem
-            id = \"${LEFTID}\"
+            certs = server-cert-eaptls.pem
+            id = \"${LEFTID_EAPTLS}\"
         }
         remote {
             auth = eap-tls
@@ -672,7 +813,9 @@ $(dsm_ntlm_secrets)"
         }
     }"
         POOLS="${POOLS}
-    pool-ikev2-eaptls { addrs = ${IKEV2_SUBNET_EAPTLS}, dns = ${IKEV2_DNS_EAPTLS} }"
+    pool-ikev2-eaptls { addrs = ${IKEV2_SUBNET_EAPTLS}, dns = $(pool_dns "$IKEV2_DNS_EAPTLS") }"
+        SECRETS="${SECRETS}
+    private-server-eaptls { file = server-key-eaptls.pem }"
     fi
 
     umask 077
@@ -682,7 +825,6 @@ $(dsm_ntlm_secrets)"
         echo "pools {${POOLS}"
         echo "}"
         echo "secrets {"
-        echo "    private-server { file = server-key.pem }"
         echo "${SECRETS}"
         echo "}"
     } > "$SWANCTL_CONF_OUT"
@@ -816,6 +958,15 @@ disconnect_conn() {
     log "disconnected all sessions on ${NAME}"
 }
 
+# full service restart: tear down the running charon, then re-apply from
+# scratch (do_apply then takes the start_charon path since none is running)
+do_restart() {
+    [ -f "${ETC}/enabled" ] || fail "service is not enabled"
+    stop_charon
+    do_apply
+    log "service restarted"
+}
+
 do_apply() {
     load_settings
     mkdir -p "$SWANCTL_ETC"
@@ -925,6 +1076,7 @@ do_status() {
     if [ -f "${CERT_DIR}/server-cert.pem" ]; then
         echo "cert_cn=$(cert_cn "${CERT_DIR}/server-cert.pem")"
         [ -f "${CERT_DIR}/self-signed" ] && echo "cert_self_signed=yes" || echo "cert_self_signed=no"
+        [ -f "${CERT_DIR}/temporary" ] && echo "cert_temporary=yes" || echo "cert_temporary=no"
     fi
     if [ -f "${CLIENTCA_DIR}/ca.pem" ]; then
         echo "clientca_cn=$(cert_cn "${CLIENTCA_DIR}/ca.pem")"
@@ -942,9 +1094,16 @@ do_status() {
     echo "listen_addrs=$(listen_addrs)"
     echo "last_applied=$(cat "${ETC}/last_applied" 2>/dev/null)"
 
+    # DNS the NAS itself uses - shown in the UI when a server is set to
+    # automatic DNS (empty dns_* value)
+    echo "server_dns=$(server_dns)"
+
+    echo "dsm_cert_default=$(dsm_cert_default)"
+
     echo "mschapv2=${IKEV2_ENABLE_MSCHAPV2}"
     echo "subnet_mschapv2=${IKEV2_SUBNET_MSCHAPV2}"
     echo "dns_mschapv2=${IKEV2_DNS_MSCHAPV2}"
+    echo "cert_mschapv2=${IKEV2_CERT_MSCHAPV2}"
 
     echo "psk_enabled=${IKEV2_ENABLE_PSK}"
     echo "psk=${IKEV2_PSK}"
@@ -954,10 +1113,12 @@ do_status() {
     echo "rsa_enabled=${IKEV2_ENABLE_RSA}"
     echo "subnet_rsa=${IKEV2_SUBNET_RSA}"
     echo "dns_rsa=${IKEV2_DNS_RSA}"
+    echo "cert_rsa=${IKEV2_CERT_RSA}"
 
     echo "eaptls_enabled=${IKEV2_ENABLE_EAPTLS}"
     echo "subnet_eaptls=${IKEV2_SUBNET_EAPTLS}"
     echo "dns_eaptls=${IKEV2_DNS_EAPTLS}"
+    echo "cert_eaptls=${IKEV2_CERT_EAPTLS}"
 
     # DSM-account MSCHAPv2: how many active DSM accounts would be registered
     # (NT hashes read live from synosmbpasswd.conf, disabled/empty excluded)
@@ -1014,10 +1175,12 @@ do_log_dump() {
 
 case "$1" in
     apply)       do_apply ;;
+    restart)     do_restart ;;
     remove)      do_remove ;;
     reload)      do_reload ;;
     status)      do_status ;;
     dsm-users)   dsm_users_list ;;
+    dsm-certs)   dsm_cert_list ;;
     clients)     do_clients ;;
     disconnect)  disconnect_conn "$2" ;;
     log-dump)    do_log_dump ;;
