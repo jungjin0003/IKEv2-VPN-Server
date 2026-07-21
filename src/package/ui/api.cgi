@@ -10,7 +10,9 @@ ETC="${PKG_DIR}/etc"
 AS="${TARGET}/bin/asroot"
 CTL="${TARGET}/bin/ikev2ctl"
 SETTINGS="${ETC}/settings.conf"
-USERS="${ETC}/users.conf"
+# DSM VPN permission allowlist (one DSM login name per line); written by the
+# 권한(Privileges) page. ikev2ctl registers only these DSM accounts.
+VPNUSERS="${ETC}/vpnusers.conf"
 
 # root | sudo | none - how privileged calls will be executed
 priv_state() {
@@ -87,18 +89,6 @@ do_status() {
         V=$(printf '%s' "$V" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')
         printf ',"%s":"%s"' "$K" "$V"
     done
-    # user list
-    printf ',"user_list":['
-    if [ -f "$USERS" ]; then
-        FIRST=1
-        while IFS=: read -r U _; do
-            [ -n "$U" ] || continue
-            [ $FIRST -eq 1 ] || printf ','
-            printf '"%s"' "$U"
-            FIRST=0
-        done < "$USERS"
-    fi
-    printf ']'
     # issued client certificates (name|expiry)
     printf ',"cert_list":['
     FIRST=1
@@ -132,7 +122,7 @@ valid_ip()   { printf '%s' "$1" | grep -Eq '^[0-9]{1,3}(\.[0-9]{1,3}){3}$'; }
 # first so a save on one "scope" never clobbers the others' values)
 load_current_settings() {
     IKEV2_HOSTNAME=""; IKEV2_ENC="auto"; IKEV2_AUTOBLOCK="no"; IKEV2_IFACE=""
-    IKEV2_ENABLE_MSCHAPV2="no"; IKEV2_MSCHAPV2_AUTH="local"
+    IKEV2_ENABLE_MSCHAPV2="no"
     IKEV2_SUBNET_MSCHAPV2="10.10.0.0/24"; IKEV2_DNS_MSCHAPV2="8.8.8.8"
     IKEV2_ENABLE_PSK="no"; IKEV2_PSK=""
     IKEV2_SUBNET_PSK="10.11.0.0/24"; IKEV2_DNS_PSK="8.8.8.8"
@@ -151,7 +141,6 @@ write_settings() {
         echo "IKEV2_AUTOBLOCK=\"${IKEV2_AUTOBLOCK}\""
         echo "IKEV2_IFACE=\"${IKEV2_IFACE}\""
         echo "IKEV2_ENABLE_MSCHAPV2=\"${IKEV2_ENABLE_MSCHAPV2}\""
-        echo "IKEV2_MSCHAPV2_AUTH=\"${IKEV2_MSCHAPV2_AUTH}\""
         echo "IKEV2_SUBNET_MSCHAPV2=\"${IKEV2_SUBNET_MSCHAPV2}\""
         echo "IKEV2_DNS_MSCHAPV2=\"${IKEV2_DNS_MSCHAPV2}\""
         echo "IKEV2_ENABLE_PSK=\"${IKEV2_ENABLE_PSK}\""
@@ -193,11 +182,10 @@ do_save() {
         ;;
     mschapv2)
         EN=$(param enabled); [ "$EN" = "yes" ] || EN="no"
-        AUTH=$(param auth_source); [ "$AUTH" = "dsm" ] || AUTH="local"
         SUBNET=$(param subnet); DNS=$(param dns)
         valid_cidr "$SUBNET" || json_err "invalid subnet (CIDR expected, e.g. 10.10.0.0/24)"
         valid_ip "$DNS" || json_err "invalid DNS"
-        IKEV2_ENABLE_MSCHAPV2="$EN"; IKEV2_MSCHAPV2_AUTH="$AUTH"
+        IKEV2_ENABLE_MSCHAPV2="$EN"
         IKEV2_SUBNET_MSCHAPV2="$SUBNET"; IKEV2_DNS_MSCHAPV2="$DNS"
         ;;
     psk)
@@ -270,41 +258,49 @@ do_certdel() {
     json_ok
 }
 
-do_useradd() {
-    require_post
-    U=$(param user)
-    P=$(param pass)
-
-    printf '%s' "$U" | grep -Eq '^[A-Za-z0-9._-]{1,32}$' \
-        || json_err "invalid username (allowed: A-Z a-z 0-9 . _ - , max 32)"
-    [ -n "$P" ] || json_err "empty password"
-    [ ${#P} -le 64 ] || json_err "password too long (max 64)"
-    case "$P" in
-        *\"*|*\\*) json_err "password must not contain quote or backslash" ;;
-    esac
-
-    P64=$(printf '%s' "$P" | openssl base64 -A)
-    mkdir -p "$ETC"
-    touch "$USERS"
-    grep -v "^${U}:" "$USERS" > "${USERS}.tmp" 2>/dev/null || true
-    echo "${U}:${P64}" >> "${USERS}.tmp"
-    mv "${USERS}.tmp" "$USERS"
-    chmod 600 "$USERS"
-
-    reapply_if_enabled
-    json_ok
+# 권한 page: the DSM local accounts with VPN status + allow flag
+# ([{name,status,allowed}]). status: normal|disabled ; allowed: yes|no
+do_dsmusers() {
+    json_headers
+    printf '['
+    FIRST=1
+    "$AS" ikev2ctl dsm-users 2>/dev/null | while IFS='|' read -r NM ST AL; do
+        [ -n "$NM" ] || continue
+        [ $FIRST -eq 1 ] || printf ','
+        printf '{"name":"%s","status":"%s","allowed":"%s"}' \
+            "$(json_str "$NM")" "$(json_str "$ST")" "$(json_str "$AL")"
+        FIRST=0
+    done
+    printf ']'
 }
 
-do_userdel() {
+# 권한 page apply: persist the allowlist (comma-separated DSM login names),
+# then stop the service and restart it so only the permitted DSM accounts are
+# registered (stop -> re-register -> restart, per requirement).
+do_vpnperm() {
     require_post
-    U=$(param user)
-    printf '%s' "$U" | grep -Eq '^[A-Za-z0-9._-]{1,32}$' || json_err "invalid username"
-    [ -f "$USERS" ] || json_ok
-    grep -v "^${U}:" "$USERS" > "${USERS}.tmp" 2>/dev/null || true
-    mv "${USERS}.tmp" "$USERS"
-    chmod 600 "$USERS"
+    LIST=$(param users)
+    mkdir -p "$ETC"
+    : > "${VPNUSERS}.tmp"
+    OIFS=$IFS; IFS=','
+    for U in $LIST; do
+        IFS=$OIFS
+        [ -n "$U" ] || { IFS=','; continue; }
+        printf '%s' "$U" | grep -Eq '^[A-Za-z0-9._-]{1,32}$' \
+            || { rm -f "${VPNUSERS}.tmp"; json_err "invalid username in list"; }
+        echo "$U" >> "${VPNUSERS}.tmp"
+        IFS=','
+    done
+    IFS=$OIFS
+    mv "${VPNUSERS}.tmp" "$VPNUSERS"
+    chmod 600 "$VPNUSERS"
 
-    reapply_if_enabled
+    # stop the running service, then re-apply so charon reloads with exactly
+    # the permitted DSM accounts registered.
+    if [ -f "${ETC}/enabled" ]; then
+        "$AS" ikev2ctl remove >/dev/null 2>&1
+        OUT=$("$AS" ikev2ctl apply 2>&1) || json_err "$(printf '%s' "$OUT" | tail -n 1 | sed 's/"/\\"/g')"
+    fi
     json_ok
 }
 
@@ -422,8 +418,8 @@ case "$ACTION" in
     enable)       do_enable ;;
     disable)      do_disable ;;
     save)         do_save ;;
-    useradd)      do_useradd ;;
-    userdel)      do_userdel ;;
+    dsmusers)     do_dsmusers ;;
+    vpnperm)      do_vpnperm ;;
     certissue)    do_certissue ;;
     certdel)      do_certdel ;;
     profile)      do_profile ;;
