@@ -129,7 +129,7 @@ table{width:100%;border-collapse:collapse}
       <div class="navitem" data-nav="connections"><svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M5.5 1.5v3.5M10.5 1.5v3.5"></path><rect x="3.5" y="5" width="9" height="5.5" rx="1.5"></rect><path d="M8 10.5v4"></path></svg><span class="nm" data-i18n="nav_connections">연결 목록</span></div>
       <div class="navitem" data-nav="log"><svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M5.5 4h9M5.5 8h9M5.5 12h9"></path><path d="M2 4h.01M2 8h.01M2 12h.01" stroke-width="2.2" stroke-linecap="round"></path></svg><span class="nm" data-i18n="nav_log">로그</span></div>
       <div class="navitem" data-nav="general"><svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="8" cy="8" r="2.4"></circle><path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M12.6 3.4l-1.4 1.4M4.8 11.2l-1.4 1.4"></path></svg><span class="nm" data-i18n="nav_general">일반 설정</span></div>
-      <div class="navitem" data-nav="accounts"><svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="8" cy="5.5" r="2.5"></circle><path d="M2.5 14c.7-3 3-4.2 5.5-4.2s4.8 1.2 5.5 4.2"></path></svg><span class="nm" data-i18n="nav_accounts">VPN 계정</span></div>
+      <div class="navitem" data-nav="privilege"><svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="8" cy="5.5" r="2.5"></circle><path d="M2.5 14c.7-3 3-4.2 5.5-4.2s4.8 1.2 5.5 4.2"></path></svg><span class="nm" data-i18n="nav_privilege">권한</span></div>
       <div class="hd" data-i18n="nav_server_group">VPN Server 설정</div>
       <div class="navitem" data-nav="mschapv2"><svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="2" y="2" width="12" height="4" rx="1"></rect><rect x="2" y="7.5" width="12" height="4" rx="1"></rect><circle cx="4.5" cy="4" r=".6" fill="currentColor" stroke="none"></circle><circle cx="4.5" cy="9.5" r=".6" fill="currentColor" stroke="none"></circle><path d="M11 4h1.5M11 9.5h1.5"></path></svg><span class="nm">IKEv2/IPsec MSCHAPv2</span><span class="dot" id="d_srv_mschapv2"></span></div>
       <div class="hd beta">Beta</div>
@@ -232,25 +232,22 @@ table{width:100%;border-collapse:collapse}
         <div class="actions"><button class="btn" id="btn_general_reset" data-i18n="btn_reset">재설정</button><button class="btn primary" id="btn_general_apply" data-i18n="btn_apply">적용</button></div>
       </div>
 
-      <!-- ================= VPN accounts ================= -->
-      <div class="page hidden" id="pg_accounts">
-        <h1 data-i18n="acc_title">VPN 계정</h1>
-        <div class="desc" data-i18n="acc_desc">MSCHAPv2(패키지 계정 모드)에서 사용할 로컬 VPN 계정입니다. DSM 계정 모드는 활성화된 DSM 사용자 계정을 그대로 사용합니다(비활성/무암호 계정은 자동 제외).</div>
-        <div class="card">
+      <!-- ================= privileges (DSM accounts) ================= -->
+      <div class="page hidden" id="pg_privilege">
+        <h1 data-i18n="priv_title">권한</h1>
+        <div class="desc" data-i18n="priv_desc">IKEv2 VPN 로그인은 DSM 사용자 계정으로만 이루어집니다. VPN 사용을 허용할 계정을 선택한 뒤 적용하세요. 적용하면 서비스가 재시작되며, 선택된 계정만 등록됩니다(비활성/무암호 계정은 로그인할 수 없습니다).</div>
+        <div class="card" style="max-width:560px">
           <div class="toolbar">
-            <input type="text" id="a_user" data-i18n-ph="ph_username" placeholder="사용자 이름" style="height:32px;border:1px solid #c3ccd4;border-radius:6px;padding:0 8px;width:160px">
-            <input type="password" id="a_pass" data-i18n-ph="ph_password" placeholder="비밀번호" style="height:32px;border:1px solid #c3ccd4;border-radius:6px;padding:0 8px;width:160px">
-            <button class="btn primary sm" id="btn_user_add" data-i18n="btn_addaccount">계정 추가</button>
-            <div style="flex:1"></div>
-            <div class="searchbox"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="#9aa2a8" stroke-width="1.6"><circle cx="7" cy="7" r="4.5"></circle><path d="M10.5 10.5L14 14"></path></svg><input id="a_search" data-i18n-ph="ph_search" placeholder="검색"></div>
+            <div class="searchbox" style="margin-left:auto"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="#9aa2a8" stroke-width="1.6"><circle cx="7" cy="7" r="4.5"></circle><path d="M10.5 10.5L14 14"></path></svg><input id="p_search" data-i18n-ph="ph_search" placeholder="검색"></div>
           </div>
-          <div class="thead" style="grid-template-columns:2fr 1fr"><div data-i18n="th_username">사용자 이름</div><div style="text-align:right" data-i18n="th_action">작업</div></div>
-          <div id="acc_rows"></div>
+          <div class="thead" style="grid-template-columns:1.6fr 1fr .8fr"><div data-i18n="th_username">사용자 이름</div><div data-i18n="th_status">상태</div><div style="text-align:center">IKEv2</div></div>
+          <div id="priv_rows"></div>
         </div>
+        <div class="actions" style="max-width:560px"><button class="btn" id="btn_priv_reset" data-i18n="btn_reset">재설정</button><button class="btn primary" id="btn_priv_apply" data-i18n="btn_apply">적용</button></div>
       </div>
 
       <!-- ================= per-server pages (mschapv2/psk/rsa/eaptls) ================= -->
-      <div class="page hidden" id="pg_server">
+      <div class="page hidden" id="pg_server" style="max-width:780px">
         <div style="display:flex;align-items:center;gap:12px;margin-bottom:6px">
           <span style="width:38px;height:38px;border-radius:10px;background:var(--accent-bg);display:flex;align-items:center;justify-content:center;flex:none"><svg width="20" height="20" viewBox="0 0 16 16" fill="none" stroke="var(--accent)" stroke-width="1.2"><rect x="2" y="2" width="12" height="4.5" rx="1"></rect><rect x="2" y="8" width="12" height="4.5" rx="1"></rect><circle cx="4.4" cy="4.25" r=".7" fill="var(--accent)" stroke="none"></circle><circle cx="4.4" cy="10.25" r=".7" fill="var(--accent)" stroke="none"></circle></svg></span>
           <div><div style="font-size:20px;font-weight:700;display:flex;align-items:center;gap:8px"><span id="sv_title">-</span><span id="sv_beta_tag" class="beta-tag hidden">BETA</span></div><div style="font-size:12.5px;color:var(--sub)" data-i18n="sv_desc">이 인증 방식을 사용하는 IKEv2 VPN 서버를 구성합니다.</div></div>
@@ -264,10 +261,7 @@ table{width:100%;border-collapse:collapse}
           <div class="form-row"><label data-i18n="lbl_subnet">클라이언트 IP 대역 (CIDR)</label><input type="text" id="sv_subnet" placeholder="10.10.0.0/24"></div>
           <div class="form-row"><label data-i18n="lbl_dns">DNS</label><input type="text" id="sv_dns" placeholder="8.8.8.8"></div>
 
-          <div class="form-row hidden" id="row_authsrc"><label data-i18n="lbl_authsrc">인증 소스</label>
-            <select id="sv_authsrc"><option value="local" data-i18n="authsrc_local">패키지 VPN 계정</option><option value="dsm" data-i18n="authsrc_dsm">DSM 사용자 계정</option></select>
-          </div>
-          <div class="notice" id="n_radius"></div>
+          <div class="notice" id="n_dsmauth" style="background:var(--accent-bg);color:#2b5f86"></div>
 
           <div class="form-row hidden" id="row_psk"><label data-i18n="lbl_psk">사전 공유 키</label><input type="password" id="sv_psk" data-i18n-ph="ph_psk_auto" placeholder="비워두면 자동 생성"></div>
 
@@ -321,13 +315,13 @@ var I18N = {
     ko: {
         refresh_title: "새로고침",
         nav_service_group: "VPN 서비스 관리", nav_server_group: "VPN Server 설정",
-        nav_overview: "개요", nav_connections: "연결 목록", nav_log: "로그", nav_general: "일반 설정", nav_accounts: "VPN 계정",
+        nav_overview: "개요", nav_connections: "연결 목록", nav_log: "로그", nav_general: "일반 설정", nav_privilege: "권한",
         ov_title: "개요", ov_desc: "IKEv2 VPN 서버의 현재 상태입니다.",
         btn_enable: "활성화", btn_disable: "비활성화",
         stat_active: "활성 서버", stat_active_sub: "인증 방식 4개 중",
         stat_conn: "현재 연결", stat_conn_sub: "실시간 세션 수",
         stat_certs: "발급된 인증서", stat_certs_sub: "RSA / EAP-TLS 클라이언트",
-        stat_users: "등록된 VPN 계정", stat_users_sub: "패키지 로컬 계정",
+        stat_users: "VPN 허용 계정", stat_users_sub: "권한 부여된 DSM 계정",
         ov_serverstate: "VPN 서버 상태", ov_serverinfo: "서버 정보",
         th_server: "서버", th_status: "상태", th_subnet: "클라이언트 IP 대역", th_conn: "연결",
         info_addr: "외부 주소", info_iface: "감지된 네트워크 인터페이스", info_port: "서비스 포트", info_applied: "마지막 설정 적용",
@@ -343,12 +337,15 @@ var I18N = {
         lbl_iface: "수신 인터페이스", opt_all_ifaces: "모든 인터페이스", lbl_egress: "인터넷 연결 인터페이스",
         sec_title: "보안", autoblock_label: "DSM 자동 차단 연동 (인증 실패 IP를 DSM 자동 차단 목록에 등록)",
         btn_reset: "재설정", btn_apply: "적용",
-        acc_title: "VPN 계정", acc_desc: "MSCHAPv2(패키지 계정 모드)에서 사용할 로컬 VPN 계정입니다. DSM 계정 모드는 활성화된 DSM 사용자 계정을 그대로 사용합니다(비활성/무암호 계정은 자동 제외).",
-        ph_username: "사용자 이름", ph_password: "비밀번호", btn_addaccount: "계정 추가", ph_search: "검색", th_username: "사용자 이름",
+        priv_title: "권한", priv_desc: "IKEv2 VPN 로그인은 DSM 사용자 계정으로만 이루어집니다. VPN 사용을 허용할 계정을 선택한 뒤 적용하세요. 적용하면 서비스가 재시작되며, 선택된 계정만 등록됩니다(비활성/무암호 계정은 로그인할 수 없습니다).",
+        st_normal: "정상", st_disabled: "비활성화",
+        no_dsm_accounts: "DSM 계정을 찾을 수 없습니다", priv_applied: "권한이 적용되었습니다 (서비스 재시작됨)",
+        dsmauth_notice: "이 서버는 <b>DSM 사용자 계정</b>으로 로그인합니다. VPN 사용을 허용할 계정은 왼쪽 <b>권한</b> 메뉴에서 선택하세요.",
+        dsmauth_count: "<br>현재 VPN 허용된 DSM 계정: <b>{n}개</b>.",
+        ph_search: "검색", th_username: "사용자 이름",
         sv_desc: "이 인증 방식을 사용하는 IKEv2 VPN 서버를 구성합니다.",
         beta_notice: "이 인증 방식은 <b>Beta</b> 기능입니다. 실기기 검증이 충분하지 않아 예고 없이 동작이 바뀌거나 정상 동작하지 않을 수 있습니다. 안정적인 사용에는 <b>IKEv2/IPsec MSCHAPv2</b>를 권장합니다.",
         lbl_subnet: "클라이언트 IP 대역 (CIDR)", lbl_dns: "DNS",
-        lbl_authsrc: "인증 소스", authsrc_local: "패키지 VPN 계정", authsrc_dsm: "DSM 사용자 계정",
         lbl_psk: "사전 공유 키", ph_psk_auto: "비워두면 자동 생성",
         enc_change_link: "(일반 설정에서 변경)",
         lbl_servercert: "서버 인증서", lbl_clientca: "클라이언트 CA", clientca_default: "패키지 자체 발급 CA",
@@ -370,14 +367,11 @@ var I18N = {
         dsmab_off: "DSM 자동 차단이 제어판 &gt; 보안 &gt; 보호에서 꺼져 있습니다. 이 옵션은 DSM 자동 차단이 켜져 있어야 동작합니다.",
         iface_missing: "(없음)",
         settings_applied: "설정이 적용되었습니다", status_query_failed: "상태 조회 실패", api_failed: "API 요청 실패",
-        no_search_results: "검색 결과가 없습니다", no_accounts: "등록된 계정이 없습니다",
-        btn_delete: "삭제", confirm_deluser: "'{user}' 계정을 삭제할까요?", deleted_ok: "삭제되었습니다",
-        enter_userpass: "사용자 이름/비밀번호를 입력하세요", account_added: "계정이 추가되었습니다",
+        no_search_results: "검색 결과가 없습니다",
+        btn_delete: "삭제", deleted_ok: "삭제되었습니다",
         server_enable_suffix: "{title} 서버 활성화",
         psk_set: "설정됨 (비워두면 유지)",
         selfsigned_suffix: " (자체 서명)", clientca_notissued: "패키지 자체 발급 CA (아직 발급 안 됨)",
-        radius_notice_main: "DSM 사용자 계정을 그대로 사용합니다. 서비스가 시작될 때마다 활성화된 DSM 계정을 자동으로 등록하며, <b>비활성화(만료)되거나 비밀번호가 없는 계정은 자동으로 제외</b>됩니다. 계정 추가·삭제나 비밀번호 변경은 다시 적용(재시작) 후 반영됩니다.",
-        radius_notice_count: "<br>현재 등록 가능한 활성 DSM 계정: <b>{n}개</b>.",
         prof_android: "Android 안내", prof_ca: "CA 인증서",
         no_certs: "발급된 인증서가 없습니다",
         confirm_delcert: "'{name}' 인증서 기록을 삭제할까요? (폐기되지는 않습니다)",
@@ -388,13 +382,13 @@ var I18N = {
     en: {
         refresh_title: "Refresh",
         nav_service_group: "VPN Service", nav_server_group: "VPN Server Settings",
-        nav_overview: "Overview", nav_connections: "Connections", nav_log: "Log", nav_general: "General", nav_accounts: "VPN Accounts",
+        nav_overview: "Overview", nav_connections: "Connections", nav_log: "Log", nav_general: "General", nav_privilege: "Privileges",
         ov_title: "Overview", ov_desc: "Current status of the IKEv2 VPN server.",
         btn_enable: "Enable", btn_disable: "Disable",
         stat_active: "Active servers", stat_active_sub: "of 4 auth methods",
         stat_conn: "Current connections", stat_conn_sub: "live sessions",
         stat_certs: "Issued certificates", stat_certs_sub: "RSA / EAP-TLS clients",
-        stat_users: "Registered VPN accounts", stat_users_sub: "package local accounts",
+        stat_users: "Permitted accounts", stat_users_sub: "DSM accounts granted VPN",
         ov_serverstate: "VPN Server Status", ov_serverinfo: "Server Info",
         th_server: "Server", th_status: "Status", th_subnet: "Client IP range", th_conn: "Conns",
         info_addr: "External address", info_iface: "Detected interface", info_port: "Service ports", info_applied: "Last applied",
@@ -410,12 +404,15 @@ var I18N = {
         lbl_iface: "Listen interface", opt_all_ifaces: "All interfaces", lbl_egress: "Internet interface",
         sec_title: "Security", autoblock_label: "DSM Auto Block integration (register auth-failure IPs in DSM's Auto Block list)",
         btn_reset: "Reset", btn_apply: "Apply",
-        acc_title: "VPN Accounts", acc_desc: "Local VPN accounts for MSCHAPv2 (package-account mode). DSM-account mode uses your active DSM user accounts directly (disabled/passwordless accounts are excluded automatically).",
-        ph_username: "Username", ph_password: "Password", btn_addaccount: "Add account", ph_search: "Search", th_username: "Username",
+        priv_title: "Privileges", priv_desc: "IKEv2 VPN login uses DSM user accounts only. Select the accounts allowed to use the VPN, then apply. Applying restarts the service and registers only the selected accounts (disabled/passwordless accounts cannot log in).",
+        st_normal: "Normal", st_disabled: "Disabled",
+        no_dsm_accounts: "No DSM accounts found", priv_applied: "Privileges applied (service restarted)",
+        dsmauth_notice: "This server authenticates <b>DSM user accounts</b>. Choose which accounts may use the VPN under the <b>Privileges</b> menu on the left.",
+        dsmauth_count: "<br>DSM accounts currently permitted: <b>{n}</b>.",
+        ph_search: "Search", th_username: "Username",
         sv_desc: "Configure the IKEv2 VPN server for this authentication method.",
         beta_notice: "This authentication method is a <b>Beta</b> feature. It has not been sufficiently tested on real devices and may change or not work without notice. For stable use, <b>IKEv2/IPsec MSCHAPv2</b> is recommended.",
         lbl_subnet: "Client IP range (CIDR)", lbl_dns: "DNS",
-        lbl_authsrc: "Auth source", authsrc_local: "Package VPN accounts", authsrc_dsm: "DSM user accounts",
         lbl_psk: "Pre-shared key", ph_psk_auto: "blank = auto-generate",
         enc_change_link: "(change in General)",
         lbl_servercert: "Server certificate", lbl_clientca: "Client CA", clientca_default: "Package-issued CA",
@@ -437,14 +434,11 @@ var I18N = {
         dsmab_off: "DSM Auto Block is turned off in Control Panel &gt; Security &gt; Protection. This option requires DSM Auto Block to be on.",
         iface_missing: "(missing)",
         settings_applied: "Settings applied", status_query_failed: "Failed to query status", api_failed: "API request failed",
-        no_search_results: "No matching results", no_accounts: "No accounts registered",
-        btn_delete: "Delete", confirm_deluser: "Delete account '{user}'?", deleted_ok: "Deleted",
-        enter_userpass: "Enter a username and password", account_added: "Account added",
+        no_search_results: "No matching results",
+        btn_delete: "Delete", deleted_ok: "Deleted",
         server_enable_suffix: "Enable {title} server",
         psk_set: "Set (blank = keep)",
         selfsigned_suffix: " (self-signed)", clientca_notissued: "Package-issued CA (not yet issued)",
-        radius_notice_main: "DSM user accounts are used directly. Each time the service starts, active DSM accounts are registered automatically, and <b>disabled (expired) or passwordless accounts are excluded</b>. Adding/removing accounts or changing passwords takes effect after re-applying (restart).",
-        radius_notice_count: "<br>Active DSM accounts currently eligible: <b>{n}</b>.",
         prof_android: "Android guide", prof_ca: "CA certificate",
         no_certs: "No certificates issued",
         confirm_delcert: "Delete the record for certificate '{name}'? (It is not revoked.)",
@@ -480,10 +474,10 @@ var API = "api.cgi";
 var STATE = null;
 var PAGE = "overview";
 var SERVER_DEFS = {
-    mschapv2: { title: "IKEv2/IPsec MSCHAPv2", enField: "mschapv2", subnetField: "subnet_mschapv2", dnsField: "dns_mschapv2", authsrc: true, psk: false, cert: true, clientca: false, connKey: "connections_mschapv2" },
-    psk:      { title: "IKEv2/IPsec PSK",      enField: "psk_enabled", subnetField: "subnet_psk", dnsField: "dns_psk", authsrc: false, psk: true, cert: false, clientca: false, connKey: "connections_psk", beta: true },
-    rsa:      { title: "IKEv2/IPsec RSA",      enField: "rsa_enabled", subnetField: "subnet_rsa", dnsField: "dns_rsa", authsrc: false, psk: false, cert: true, clientca: true, connKey: "connections_rsa", beta: true },
-    eaptls:   { title: "IKEv2/IPsec EAP-TLS",  enField: "eaptls_enabled", subnetField: "subnet_eaptls", dnsField: "dns_eaptls", authsrc: false, psk: false, cert: true, clientca: true, connKey: "connections_eaptls", beta: true }
+    mschapv2: { title: "IKEv2/IPsec MSCHAPv2", enField: "mschapv2", subnetField: "subnet_mschapv2", dnsField: "dns_mschapv2", dsmauth: true, psk: false, cert: true, clientca: false, connKey: "connections_mschapv2" },
+    psk:      { title: "IKEv2/IPsec PSK",      enField: "psk_enabled", subnetField: "subnet_psk", dnsField: "dns_psk", dsmauth: false, psk: true, cert: false, clientca: false, connKey: "connections_psk", beta: true },
+    rsa:      { title: "IKEv2/IPsec RSA",      enField: "rsa_enabled", subnetField: "subnet_rsa", dnsField: "dns_rsa", dsmauth: false, psk: false, cert: true, clientca: true, connKey: "connections_rsa", beta: true },
+    eaptls:   { title: "IKEv2/IPsec EAP-TLS",  enField: "eaptls_enabled", subnetField: "subnet_eaptls", dnsField: "dns_eaptls", dsmauth: false, psk: false, cert: true, clientca: true, connKey: "connections_eaptls", beta: true }
 };
 
 function $(id) { return document.getElementById(id); }
@@ -513,9 +507,9 @@ function go(page) {
     for (var i = 0; i < items.length; i++) {
         items[i].className = "navitem" + (items[i].getAttribute("data-nav") === page ? " active" : "");
     }
-    var pages = { overview: "pg_overview", connections: "pg_connections", log: "pg_log", general: "pg_general", accounts: "pg_accounts",
+    var pages = { overview: "pg_overview", connections: "pg_connections", log: "pg_log", general: "pg_general", privilege: "pg_privilege",
         mschapv2: "pg_server", psk: "pg_server", rsa: "pg_server", eaptls: "pg_server" };
-    var ids = ["pg_overview", "pg_connections", "pg_log", "pg_general", "pg_accounts", "pg_server"];
+    var ids = ["pg_overview", "pg_connections", "pg_log", "pg_general", "pg_privilege", "pg_server"];
     for (i = 0; i < ids.length; i++) $(ids[i]).className = "page hidden";
     $(pages[page]).className = "page";
 
@@ -523,7 +517,7 @@ function go(page) {
     else if (page === "log") loadEvents();
     else if (SERVER_DEFS[page]) renderServerPage(page);
     else if (page === "general") renderGeneral();
-    else if (page === "accounts") renderAccounts();
+    else if (page === "privilege") loadPrivilege();
 }
 
 var navEls = document.querySelectorAll(".navitem");
@@ -595,7 +589,7 @@ function renderOverview() {
     $("s_active").innerHTML = activeCount + '<span class="unit">/ 4</span>';
     $("s_conn").textContent = String(s.connections || totalConn || 0);
     $("s_certs").textContent = String(s.certs || 0);
-    $("s_users").textContent = String(s.users || 0);
+    $("s_users").textContent = String(s.dsm_accounts || 0);
     $("t_enabledcount").textContent = t("enabled_count", { n: activeCount });
 
     var rows = "";
@@ -762,42 +756,65 @@ $("btn_general_apply").onclick = function () {
     });
 };
 
-// -------------------------------------------------------------------- accounts
+// -------------------------------------------------------------------- privileges (DSM accounts)
 
-function renderAccounts() {
-    var s = STATE; if (!s) return;
-    var q = ($("a_search").value || "").toLowerCase();
-    var list = (s.user_list || []).filter(function (u) { return !q || u.toLowerCase().indexOf(q) !== -1; });
+// PRIV_USERS: [{name,status,allowed}] loaded from the server.
+// PRIV_ALLOW: live edit map name->bool (the checkbox state before applying).
+var PRIV_USERS = [];
+var PRIV_ALLOW = {};
+
+function loadPrivilege() {
+    $("priv_rows").innerHTML = '<div class="empty">' + esc(t("loading")) + '</div>';
+    getJSON("dsmusers").then(function (list) {
+        PRIV_USERS = list || [];
+        PRIV_ALLOW = {};
+        PRIV_USERS.forEach(function (u) { PRIV_ALLOW[u.name] = (u.allowed === "yes"); });
+        renderPrivilege();
+    }).catch(function () { $("priv_rows").innerHTML = '<div class="empty">' + esc(t("load_failed")) + '</div>'; });
+}
+
+function renderPrivilege() {
+    var q = ($("p_search").value || "").toLowerCase();
+    var list = PRIV_USERS.filter(function (u) { return !q || u.name.toLowerCase().indexOf(q) !== -1; });
+    if (!PRIV_USERS.length) {
+        $("priv_rows").innerHTML = '<div class="empty">' + esc(t("no_dsm_accounts")) + '</div>';
+        return;
+    }
     if (!list.length) {
-        $("acc_rows").innerHTML = '<div class="empty">' + esc(q ? t("no_search_results") : t("no_accounts")) + '</div>';
+        $("priv_rows").innerHTML = '<div class="empty">' + esc(t("no_search_results")) + '</div>';
         return;
     }
     var rows = "";
     list.forEach(function (u) {
-        rows += '<div class="trow" style="grid-template-columns:2fr 1fr">'
-            + '<div style="display:flex;align-items:center;gap:10px"><span style="width:26px;height:26px;border-radius:50%;background:var(--accent-bg);color:var(--accent);display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700">' + esc(u.charAt(0).toUpperCase()) + '</span>' + esc(u) + '</div>'
-            + '<div style="text-align:right"><button class="btn danger sm" data-user="' + esc(u) + '">' + esc(t("btn_delete")) + '</button></div>'
+        var normal = u.status === "normal";
+        var stColor = normal ? "var(--ok)" : "#9aa2a8";
+        var stLabel = normal ? t("st_normal") : t("st_disabled");
+        var checked = PRIV_ALLOW[u.name] ? " checked" : "";
+        var dis = normal ? "" : " disabled";
+        rows += '<div class="trow" style="grid-template-columns:1.6fr 1fr .8fr">'
+            + '<div style="font-weight:600">' + esc(u.name) + '</div>'
+            + '<div style="color:' + stColor + '">' + esc(stLabel) + '</div>'
+            + '<div style="text-align:center"><input type="checkbox" class="p_chk" data-user="' + esc(u.name) + '"' + checked + dis + ' style="width:15px;height:15px;accent-color:var(--accent);margin:0;cursor:pointer"></div>'
             + '</div>';
     });
-    $("acc_rows").innerHTML = rows;
-    var btns = $("acc_rows").querySelectorAll("button[data-user]");
-    for (var i = 0; i < btns.length; i++) {
-        btns[i].onclick = function () {
-            var u = this.getAttribute("data-user");
-            if (!confirm(t("confirm_deluser", { user: u }))) return;
-            post({ action: "userdel", user: u }).then(function (r) { toast(r.success ? t("deleted_ok") : t("fail")); refresh().then(renderAccounts); });
-        };
+    $("priv_rows").innerHTML = rows;
+    var chks = $("priv_rows").querySelectorAll("input.p_chk");
+    for (var i = 0; i < chks.length; i++) {
+        chks[i].onchange = function () { PRIV_ALLOW[this.getAttribute("data-user")] = this.checked; };
     }
 }
-$("a_search").oninput = renderAccounts;
-$("btn_user_add").onclick = function () {
-    var u = $("a_user").value.trim(), p = $("a_pass").value;
-    if (!u || !p) { toast(t("enter_userpass")); return; }
-    post({ action: "useradd", user: u, pass: p }).then(function (r) {
+$("p_search").oninput = renderPrivilege;
+$("btn_priv_reset").onclick = loadPrivilege;
+$("btn_priv_apply").onclick = function () {
+    var allowed = [];
+    PRIV_USERS.forEach(function (u) { if (u.status === "normal" && PRIV_ALLOW[u.name]) allowed.push(u.name); });
+    var btn = $("btn_priv_apply");
+    btn.disabled = true;
+    post({ action: "vpnperm", users: allowed.join(",") }).then(function (r) {
+        btn.disabled = false;
         if (!r.success) { toast(r.error || t("fail")); return; }
-        $("a_user").value = ""; $("a_pass").value = "";
-        toast(t("account_added")); refresh().then(renderAccounts);
-    });
+        toast(t("priv_applied")); loadPrivilege(); refresh();
+    }).catch(function () { btn.disabled = false; toast(t("api_failed")); });
 };
 
 // -------------------------------------------------------------------- server pages
@@ -814,12 +831,10 @@ function renderServerPage(m) {
         $("sv_enabled").checked = s[def.enField] === "yes";
         $("sv_subnet").value = s[def.subnetField] || "";
         $("sv_dns").value = s[def.dnsField] || "";
-        if (def.authsrc) $("sv_authsrc").value = s.mschapv2_auth === "dsm" ? "dsm" : "local";
         if (def.psk) $("sv_psk").value = "";
     }
     $("sv_psk").placeholder = s.psk ? t("psk_set") : t("ph_psk_auto");
 
-    $("row_authsrc").className = "form-row" + (def.authsrc ? "" : " hidden");
     $("row_psk").className = "form-row" + (def.psk ? "" : " hidden");
     $("row_cert").className = "form-row" + (def.cert ? "" : " hidden");
     $("row_clientca").className = "form-row" + (def.clientca ? "" : " hidden");
@@ -833,13 +848,14 @@ function renderServerPage(m) {
     $("sv_enc_ro").textContent = encLabel(s.enc);
     $("sv_enc_link").onclick = function (e) { e.preventDefault(); go("general"); };
 
-    var radius = $("n_radius");
-    if (def.authsrc && $("sv_authsrc").value === "dsm") {
+    // MSCHAPv2 authenticates DSM accounts only; point the user at 권한 page
+    var dsmNote = $("n_dsmauth");
+    if (def.dsmauth) {
         var n = (typeof s.dsm_accounts !== "undefined") ? parseInt(s.dsm_accounts, 10) : NaN;
-        radius.innerHTML = t("radius_notice_main") + (!isNaN(n) ? t("radius_notice_count", { n: n }) : "");
-        radius.className = "notice show";
+        dsmNote.innerHTML = t("dsmauth_notice") + (!isNaN(n) ? t("dsmauth_count", { n: n }) : "");
+        dsmNote.className = "notice show";
     } else {
-        radius.className = "notice";
+        dsmNote.className = "notice";
     }
 
     // profile downloads
@@ -868,7 +884,6 @@ function downloadProfile(type) {
     f.submit();
 }
 
-$("sv_authsrc").onchange = function () { renderServerPage(PAGE); };
 $("btn_server_reset").onclick = function () { renderServerPage(PAGE); };
 $("btn_server_apply").onclick = function () {
     var def = SERVER_DEFS[PAGE];
@@ -878,7 +893,6 @@ $("btn_server_apply").onclick = function () {
         subnet: $("sv_subnet").value.trim(),
         dns: $("sv_dns").value.trim()
     };
-    if (def.authsrc) params.auth_source = $("sv_authsrc").value;
     if (def.psk) params.psk = $("sv_psk").value;
     post(params).then(function (r) {
         if (!r.success) { toast(r.error || t("fail")); return; }
