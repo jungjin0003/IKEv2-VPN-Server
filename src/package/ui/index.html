@@ -17,6 +17,30 @@ a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
 input,select,button{font-family:inherit;font-size:13px}
 input:disabled,select:disabled{background:#f5f6f7!important;color:#b0b5ba!important;border-color:#e0e4e8!important}
 select:focus,input:focus{border-color:var(--accent)!important;outline:none}
+/* custom dropdown matching the mockup; the native <select> is kept hidden as
+   the value/options source. The popup is appended to <body> and positioned
+   with position:fixed so it is never clipped by overflow/stacking contexts. */
+.dd{position:relative;width:100%;font-size:13px;user-select:none}
+.dd-box{display:flex;align-items:center;height:34px;border:1px solid #c3ccd4;border-radius:6px;
+    background:#fff;cursor:pointer;overflow:hidden;transition:border-color .12s}
+.dd-box:hover,.dd.open .dd-box{border-color:var(--accent)}
+.dd-val{flex:1;min-width:0;padding:0 10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#333}
+.dd-chev{width:30px;flex:none;align-self:stretch;display:flex;align-items:center;justify-content:center;
+    border-left:1px solid #dbe1e7;background:#f4f8fc}
+.dd.open .dd-chev{border-left-color:#bcdaf1;background:#e8f2fb}
+.dd-chev svg{stroke:var(--accent);transition:transform .15s}
+.dd.open .dd-chev svg{transform:rotate(180deg)}
+.dd.disabled .dd-box{background:#f5f6f7;cursor:default;border-color:#c3ccd4}
+.dd.disabled .dd-box:hover{border-color:#c3ccd4}
+.dd.disabled .dd-val{color:#b0b5ba}
+.dd.disabled .dd-chev{background:#f5f6f7;border-left-color:#e5e9ed}
+.dd.disabled .dd-chev svg{stroke:#b8bfc5}
+.dd-pop{position:fixed;background:#fff;border:1px solid #d5dce2;border-radius:6px;
+    box-shadow:0 6px 20px rgba(0,0,0,.16);padding:4px;z-index:9999;max-height:280px;overflow-y:auto}
+.dd-opt{padding:8px 12px;border-radius:4px;cursor:pointer;font-size:13px;white-space:nowrap;color:#333}
+.dd-opt:hover{background:var(--accent-bg);color:var(--accent)}
+.dd-opt.sel{background:var(--accent-bg);color:var(--accent);font-weight:600}
+.form-row .dd{max-width:320px}
 ::-webkit-scrollbar{width:10px;height:10px}
 ::-webkit-scrollbar-thumb{background:#c9d0d7;border-radius:5px;border:2px solid transparent;background-clip:padding-box}
 
@@ -86,6 +110,11 @@ table{width:100%;border-collapse:collapse}
 .form-row label{color:#4a525a}
 .form-row input[type=text],.form-row input[type=password],.form-row select{
     height:32px;border:1px solid #c3ccd4;border-radius:6px;padding:0 8px;max-width:320px;width:100%}
+.form-row select{height:34px;padding:0 40px 0 11px}
+.octets{display:flex;align-items:center;gap:6px}
+.form-row .octets input{width:52px;height:32px;border:1px solid #c3ccd4;border-radius:6px;padding:0 6px;max-width:52px;text-align:center;font-variant-numeric:tabular-nums}
+.octets .dot-sep{color:#8b939b}
+.octets .octet-suffix{color:#5b636b;font-weight:600;font-variant-numeric:tabular-nums;margin-left:2px}
 .chk{display:flex;align-items:center;gap:8px;cursor:pointer}
 .chk input{width:15px;height:15px;accent-color:var(--accent);margin:0}
 
@@ -108,6 +137,18 @@ table{width:100%;border-collapse:collapse}
     background:rgba(40,44,48,.94);color:#fff;padding:9px 20px;border-radius:8px;font-size:12.5px;
     box-shadow:0 4px 14px rgba(0,0,0,.25);opacity:0;pointer-events:none;transition:.2s}
 #toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+
+/* busy overlay shown while a change is being applied (service restarts) */
+#busy{position:fixed;inset:0;z-index:50;display:none;align-items:center;justify-content:center;
+    background:rgba(20,24,28,.42);backdrop-filter:blur(1.5px)}
+#busy.show{display:flex}
+#busy .busy-box{background:#fff;border-radius:12px;padding:26px 34px;min-width:260px;text-align:center;
+    box-shadow:0 10px 40px rgba(0,0,0,.28)}
+#busy .spinner{width:38px;height:38px;margin:0 auto 16px;border-radius:50%;
+    border:3.5px solid #e3e8ed;border-top-color:var(--accent);animation:busy-spin .8s linear infinite}
+#busy .busy-msg{font-size:14px;font-weight:700;color:var(--txt)}
+#busy .busy-sub{font-size:12px;color:var(--sub);margin-top:5px}
+@keyframes busy-spin{to{transform:rotate(360deg)}}
 </style>
 </head>
 <body>
@@ -119,7 +160,7 @@ table{width:100%;border-collapse:collapse}
     <div class="badge">DSM 7.2</div>
     <div class="spacer"></div>
     <div class="stat"><span class="dot" id="d_svc"></span><span id="t_svc">-</span></div>
-    <button class="iconbtn" id="btn_refresh" data-i18n-title="refresh_title" title="새로고침"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9"></path><path d="M13.5 1.5v3.5H10"></path></svg></button>
+    <button class="iconbtn" id="btn_refresh" data-i18n-title="restart_title" title="서비스 재시작"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9"></path><path d="M13.5 1.5v3.5H10"></path></svg></button>
   </div>
 
   <div class="body">
@@ -148,8 +189,8 @@ table{width:100%;border-collapse:collapse}
         <div class="notice" id="n_daemon"></div>
 
         <div style="margin-bottom:18px">
-          <button class="btn primary" id="btn_svc_enable" data-i18n="btn_enable">활성화</button>
-          <button class="btn" id="btn_svc_disable" data-i18n="btn_disable">비활성화</button>
+          <button class="btn primary" id="btn_svc_enable" data-i18n="btn_enable">서비스 시작</button>
+          <button class="btn" id="btn_svc_disable" data-i18n="btn_disable">서비스 중지</button>
         </div>
 
         <div class="statgrid">
@@ -197,7 +238,7 @@ table{width:100%;border-collapse:collapse}
             <button class="btn" id="btn_log_clear" data-i18n="btn_clear">정리</button>
             <button class="btn" id="btn_log_export" data-i18n="btn_export">내보내기</button>
             <div style="flex:1"></div>
-            <select id="f_log_proto" style="width:200px;height:34px;border:1px solid #c3ccd4;border-radius:6px;padding:0 8px">
+            <select id="f_log_proto" style="width:200px;height:34px">
               <option value="" data-i18n="opt_all">모두</option>
               <option value="MSCHAPv2">IKEv2/IPsec MSCHAPv2</option>
               <option value="PSK">IKEv2/IPsec PSK</option>
@@ -258,8 +299,18 @@ table{width:100%;border-collapse:collapse}
         <div class="card"><div class="pad">
           <label class="chk" style="padding-bottom:16px;margin-bottom:16px;border-bottom:1px solid var(--line2)"><input type="checkbox" id="sv_enabled"><span style="font-weight:600;font-size:14px" id="sv_enabled_label">서버 활성화</span></label>
 
-          <div class="form-row"><label data-i18n="lbl_subnet">클라이언트 IP 대역 (CIDR)</label><input type="text" id="sv_subnet" placeholder="10.10.0.0/24"></div>
-          <div class="form-row"><label data-i18n="lbl_dns">DNS</label><input type="text" id="sv_dns" placeholder="8.8.8.8"></div>
+          <div class="form-row"><label data-i18n="lbl_subnet">클라이언트 IP 대역</label>
+            <div class="octets">
+              <input type="text" id="sv_ip1" maxlength="3" inputmode="numeric"><span class="dot-sep">.</span>
+              <input type="text" id="sv_ip2" maxlength="3" inputmode="numeric"><span class="dot-sep">.</span>
+              <input type="text" id="sv_ip3" maxlength="3" inputmode="numeric"><span class="dot-sep">.</span>
+              <span class="octet-suffix">0</span>
+            </div>
+          </div>
+          <div class="form-row"><label data-i18n="lbl_dns" id="lbl_dns_mode">DNS</label>
+            <label class="chk"><input type="checkbox" id="sv_dns_manual"><span data-i18n="dns_manual">수동 DNS 사용</span></label>
+          </div>
+          <div class="form-row" id="row_dns"><label data-i18n="lbl_dns_addr">DNS 주소</label><input type="text" id="sv_dns" placeholder="8.8.8.8"></div>
 
           <div class="notice" id="n_dsmauth" style="background:var(--accent-bg);color:#2b5f86"></div>
 
@@ -267,7 +318,7 @@ table{width:100%;border-collapse:collapse}
 
           <div class="form-row"><label data-i18n="lbl_enc">암호화</label><span id="sv_enc_ro" style="color:#4a525a">-</span>&nbsp;<a href="#" id="sv_enc_link" data-i18n="enc_change_link">(일반 설정에서 변경)</a></div>
 
-          <div class="form-row hidden" id="row_cert"><label data-i18n="lbl_servercert">서버 인증서</label><span id="sv_cert_ro" style="color:#4a525a">-</span></div>
+          <div class="form-row hidden" id="row_cert"><label data-i18n="lbl_servercert">서버 인증서</label><select id="sv_cert"></select></div>
           <div class="form-row hidden" id="row_clientca"><label data-i18n="lbl_clientca">클라이언트 CA</label><span id="sv_clientca_ro" style="color:#4a525a" data-i18n="clientca_default">패키지 자체 발급 CA</span></div>
         </div></div>
 
@@ -299,6 +350,7 @@ table{width:100%;border-collapse:collapse}
 </div>
 
 <div id="toast"></div>
+<div id="busy"><div class="busy-box"><div class="spinner"></div><div class="busy-msg" id="busy_msg" data-i18n="applying">적용하는 중입니다…</div><div class="busy-sub" data-i18n="applying_sub">서비스를 재시작하는 동안 잠시 기다려 주세요.</div></div></div>
 
 <form id="f_download" method="POST" style="display:none" target="dl_frame"></form>
 <iframe name="dl_frame" style="display:none"></iframe>
@@ -313,11 +365,11 @@ var LANG = (function () {
 
 var I18N = {
     ko: {
-        refresh_title: "새로고침",
+        restart_title: "서비스 재시작",
         nav_service_group: "VPN 서비스 관리", nav_server_group: "VPN Server 설정",
         nav_overview: "개요", nav_connections: "연결 목록", nav_log: "로그", nav_general: "일반 설정", nav_privilege: "권한",
         ov_title: "개요", ov_desc: "IKEv2 VPN 서버의 현재 상태입니다.",
-        btn_enable: "활성화", btn_disable: "비활성화",
+        btn_enable: "서비스 시작", btn_disable: "서비스 중지",
         stat_active: "활성 서버", stat_active_sub: "인증 방식 4개 중",
         stat_conn: "현재 연결", stat_conn_sub: "실시간 세션 수",
         stat_certs: "발급된 인증서", stat_certs_sub: "RSA / EAP-TLS 클라이언트",
@@ -345,16 +397,18 @@ var I18N = {
         ph_search: "검색", th_username: "사용자 이름",
         sv_desc: "이 인증 방식을 사용하는 IKEv2 VPN 서버를 구성합니다.",
         beta_notice: "이 인증 방식은 <b>Beta</b> 기능입니다. 실기기 검증이 충분하지 않아 예고 없이 동작이 바뀌거나 정상 동작하지 않을 수 있습니다. 안정적인 사용에는 <b>IKEv2/IPsec MSCHAPv2</b>를 권장합니다.",
-        lbl_subnet: "클라이언트 IP 대역 (CIDR)", lbl_dns: "DNS",
+        lbl_subnet: "클라이언트 IP 대역", lbl_dns: "DNS", dns_manual: "수동 DNS 사용", lbl_dns_addr: "DNS 주소",
+        subnet_incomplete: "IP 대역을 모두 입력하세요.",
         lbl_psk: "사전 공유 키", ph_psk_auto: "비워두면 자동 생성",
         enc_change_link: "(일반 설정에서 변경)",
         lbl_servercert: "서버 인증서", lbl_clientca: "클라이언트 CA", clientca_default: "패키지 자체 발급 CA",
+        cert_none: "DSM 인증서 없음 (임시 인증서 사용)", cert_missing: "(삭제됨)",
         profiles_title: "클라이언트 프로필", clientcert_title: "클라이언트 인증서",
         ph_certname: "인증서 이름", ph_p12pass: "P12 비밀번호", btn_issue: "발급 & 다운로드",
         th_name: "이름", th_expiry: "만료일",
         svc_stopped: "서비스 중지됨", svc_running: "서비스 실행 중", svc_daemon_stopped: "IPsec 데몬 중지됨",
         setup_notice: "<b>권한 설정이 필요합니다.</b> SSH에서 <code>sudo {cmd}</code>를 1회 실행한 뒤 새로고침하세요.",
-        daemon_notice: "IPsec 데몬이 실행 중이 아닙니다. 서비스를 다시 활성화하거나 로그를 확인하세요.",
+        daemon_notice: "IPsec 데몬이 실행 중이 아닙니다. 서비스를 다시 시작하거나 로그를 확인하세요.",
         enabled_count: "{n} / 4 활성화",
         state_on: "활성화됨", state_off: "사용 안함", iface_none: "감지 안 됨",
         loading: "불러오는 중…", load_failed: "불러오기 실패",
@@ -367,6 +421,9 @@ var I18N = {
         dsmab_off: "DSM 자동 차단이 제어판 &gt; 보안 &gt; 보호에서 꺼져 있습니다. 이 옵션은 DSM 자동 차단이 켜져 있어야 동작합니다.",
         iface_missing: "(없음)",
         settings_applied: "설정이 적용되었습니다", status_query_failed: "상태 조회 실패", api_failed: "API 요청 실패",
+        applying: "적용하는 중입니다…", applying_sub: "잠시만 기다려 주세요.", loading: "정보를 불러오는 중입니다…",
+        svc_starting: "서비스를 시작하는 중입니다…", svc_stopping: "서비스를 중지하는 중입니다…", svc_restarting: "서비스를 재시작하는 중입니다…",
+        svc_restarted: "서비스가 재시작되었습니다", svc_not_running: "서비스가 실행 중이 아닙니다", confirm_restart: "VPN 서비스를 재시작할까요? 모든 연결이 잠시 끊어집니다.",
         no_search_results: "검색 결과가 없습니다",
         btn_delete: "삭제", deleted_ok: "삭제되었습니다",
         server_enable_suffix: "{title} 서버 활성화",
@@ -376,15 +433,15 @@ var I18N = {
         no_certs: "발급된 인증서가 없습니다",
         confirm_delcert: "'{name}' 인증서 기록을 삭제할까요? (폐기되지는 않습니다)",
         enter_namepass: "이름/비밀번호를 입력하세요",
-        enable_failed: "활성화 실패", enabled_ok: "활성화되었습니다",
-        confirm_disable: "VPN 서비스를 비활성화할까요? 모든 연결이 끊어집니다.", disabled_ok: "비활성화되었습니다"
+        enable_failed: "서비스 시작 실패", enabled_ok: "서비스가 시작되었습니다",
+        confirm_disable: "VPN 서비스를 중지할까요? 모든 연결이 끊어집니다.", disabled_ok: "서비스가 중지되었습니다"
     },
     en: {
-        refresh_title: "Refresh",
+        restart_title: "Restart service",
         nav_service_group: "VPN Service", nav_server_group: "VPN Server Settings",
         nav_overview: "Overview", nav_connections: "Connections", nav_log: "Log", nav_general: "General", nav_privilege: "Privileges",
         ov_title: "Overview", ov_desc: "Current status of the IKEv2 VPN server.",
-        btn_enable: "Enable", btn_disable: "Disable",
+        btn_enable: "Start service", btn_disable: "Stop service",
         stat_active: "Active servers", stat_active_sub: "of 4 auth methods",
         stat_conn: "Current connections", stat_conn_sub: "live sessions",
         stat_certs: "Issued certificates", stat_certs_sub: "RSA / EAP-TLS clients",
@@ -412,16 +469,18 @@ var I18N = {
         ph_search: "Search", th_username: "Username",
         sv_desc: "Configure the IKEv2 VPN server for this authentication method.",
         beta_notice: "This authentication method is a <b>Beta</b> feature. It has not been sufficiently tested on real devices and may change or not work without notice. For stable use, <b>IKEv2/IPsec MSCHAPv2</b> is recommended.",
-        lbl_subnet: "Client IP range (CIDR)", lbl_dns: "DNS",
+        lbl_subnet: "Client IP range", lbl_dns: "DNS", dns_manual: "Use manual DNS", lbl_dns_addr: "DNS address",
+        subnet_incomplete: "Enter the full IP range.",
         lbl_psk: "Pre-shared key", ph_psk_auto: "blank = auto-generate",
         enc_change_link: "(change in General)",
         lbl_servercert: "Server certificate", lbl_clientca: "Client CA", clientca_default: "Package-issued CA",
+        cert_none: "No DSM certificate (temporary cert used)", cert_missing: "(deleted)",
         profiles_title: "Client profiles", clientcert_title: "Client certificates",
         ph_certname: "Certificate name", ph_p12pass: "P12 password", btn_issue: "Issue & download",
         th_name: "Name", th_expiry: "Expires",
         svc_stopped: "Service stopped", svc_running: "Service running", svc_daemon_stopped: "IPsec daemon stopped",
         setup_notice: "<b>Setup required.</b> Run <code>sudo {cmd}</code> once over SSH, then refresh.",
-        daemon_notice: "The IPsec daemon is not running. Re-enable the service or check the log.",
+        daemon_notice: "The IPsec daemon is not running. Start the service again or check the log.",
         enabled_count: "{n} / 4 active",
         state_on: "Enabled", state_off: "Disabled", iface_none: "Not detected",
         loading: "Loading…", load_failed: "Failed to load",
@@ -434,6 +493,9 @@ var I18N = {
         dsmab_off: "DSM Auto Block is turned off in Control Panel &gt; Security &gt; Protection. This option requires DSM Auto Block to be on.",
         iface_missing: "(missing)",
         settings_applied: "Settings applied", status_query_failed: "Failed to query status", api_failed: "API request failed",
+        applying: "Applying…", applying_sub: "Please wait a moment.", loading: "Loading…",
+        svc_starting: "Starting the service…", svc_stopping: "Stopping the service…", svc_restarting: "Restarting the service…",
+        svc_restarted: "Service restarted", svc_not_running: "Service is not running", confirm_restart: "Restart the VPN service? All connections will drop briefly.",
         no_search_results: "No matching results",
         btn_delete: "Delete", deleted_ok: "Deleted",
         server_enable_suffix: "Enable {title} server",
@@ -443,8 +505,8 @@ var I18N = {
         no_certs: "No certificates issued",
         confirm_delcert: "Delete the record for certificate '{name}'? (It is not revoked.)",
         enter_namepass: "Enter a name and password",
-        enable_failed: "Enable failed", enabled_ok: "Enabled",
-        confirm_disable: "Disable the VPN service? All connections will drop.", disabled_ok: "Disabled"
+        enable_failed: "Failed to start service", enabled_ok: "Service started",
+        confirm_disable: "Stop the VPN service? All connections will drop.", disabled_ok: "Service stopped"
     }
 };
 
@@ -474,14 +536,108 @@ var API = "api.cgi";
 var STATE = null;
 var PAGE = "overview";
 var SERVER_DEFS = {
-    mschapv2: { title: "IKEv2/IPsec MSCHAPv2", enField: "mschapv2", subnetField: "subnet_mschapv2", dnsField: "dns_mschapv2", dsmauth: true, psk: false, cert: true, clientca: false, connKey: "connections_mschapv2" },
+    mschapv2: { title: "IKEv2/IPsec MSCHAPv2", enField: "mschapv2", subnetField: "subnet_mschapv2", dnsField: "dns_mschapv2", certField: "cert_mschapv2", dsmauth: true, psk: false, cert: true, clientca: false, connKey: "connections_mschapv2" },
     psk:      { title: "IKEv2/IPsec PSK",      enField: "psk_enabled", subnetField: "subnet_psk", dnsField: "dns_psk", dsmauth: false, psk: true, cert: false, clientca: false, connKey: "connections_psk", beta: true },
-    rsa:      { title: "IKEv2/IPsec RSA",      enField: "rsa_enabled", subnetField: "subnet_rsa", dnsField: "dns_rsa", dsmauth: false, psk: false, cert: true, clientca: true, connKey: "connections_rsa", beta: true },
-    eaptls:   { title: "IKEv2/IPsec EAP-TLS",  enField: "eaptls_enabled", subnetField: "subnet_eaptls", dnsField: "dns_eaptls", dsmauth: false, psk: false, cert: true, clientca: true, connKey: "connections_eaptls", beta: true }
+    rsa:      { title: "IKEv2/IPsec RSA",      enField: "rsa_enabled", subnetField: "subnet_rsa", dnsField: "dns_rsa", certField: "cert_rsa", dsmauth: false, psk: false, cert: true, clientca: true, connKey: "connections_rsa", beta: true },
+    eaptls:   { title: "IKEv2/IPsec EAP-TLS",  enField: "eaptls_enabled", subnetField: "subnet_eaptls", dnsField: "dns_eaptls", certField: "cert_eaptls", dsmauth: false, psk: false, cert: true, clientca: true, connKey: "connections_eaptls", beta: true }
 };
 
 function $(id) { return document.getElementById(id); }
 function esc(s) { s = String(s == null ? "" : s); var d = document.createElement("div"); d.textContent = s; return d.innerHTML; }
+
+// ------------------------------------------------------- custom dropdown
+// Replace a native <select> with a styled widget, keeping the select hidden as
+// the value/options source so existing code (sel.value, sel.innerHTML options,
+// onchange) keeps working. The popup is appended to <body> and positioned with
+// position:fixed, so it always sits on top and is never clipped by scroll or
+// stacking contexts. After changing a select programmatically call
+// syncDropdown(id) to redraw.
+function enhanceSelect(sel) {
+    if (!sel || sel._dd) return;
+    var wrap = document.createElement("div");
+    wrap.className = "dd";
+    if (sel.style.width) wrap.style.width = sel.style.width;
+    sel.parentNode.insertBefore(wrap, sel);
+    sel.style.display = "none";
+    wrap.appendChild(sel);
+
+    var box = document.createElement("div"); box.className = "dd-box";
+    var val = document.createElement("span"); val.className = "dd-val";
+    var chev = document.createElement("span"); chev.className = "dd-chev";
+    chev.innerHTML = '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M3.5 6l4.5 4.5L12.5 6"></path></svg>';
+    box.appendChild(val); box.appendChild(chev);
+    wrap.appendChild(box);
+
+    // popup lives on <body> so overflow/stacking of ancestors can't clip it
+    var pop = document.createElement("div"); pop.className = "dd-pop"; pop.style.display = "none";
+    document.body.appendChild(pop);
+
+    function isOpen() { return pop.style.display === "block"; }
+
+    function place() {
+        var r = box.getBoundingClientRect();
+        pop.style.left = r.left + "px";
+        pop.style.width = r.width + "px";
+        var popH = pop.offsetHeight;
+        var below = window.innerHeight - r.bottom;
+        if (below < popH + 8 && r.top > below) pop.style.top = (r.top - popH - 4) + "px";
+        else pop.style.top = (r.bottom + 4) + "px";
+    }
+    function onScrollResize() { if (isOpen()) close(); }
+
+    function open() {
+        if (sel.disabled) return;
+        renderPop();
+        pop.style.display = "block";
+        place();
+        wrap.className = "dd open";
+        window.addEventListener("scroll", onScrollResize, true);
+        window.addEventListener("resize", onScrollResize, true);
+    }
+    function close() {
+        pop.style.display = "none";
+        wrap.className = "dd" + (sel.disabled ? " disabled" : "");
+        window.removeEventListener("scroll", onScrollResize, true);
+        window.removeEventListener("resize", onScrollResize, true);
+    }
+
+    function renderBox() {
+        wrap.className = "dd" + (sel.disabled ? " disabled" : "") + (isOpen() ? " open" : "");
+        var selText = "";
+        for (var i = 0; i < sel.options.length; i++) { if (sel.options[i].value === sel.value) { selText = sel.options[i].text; break; } }
+        val.textContent = selText;
+    }
+    function renderPop() {
+        pop.innerHTML = "";
+        for (var i = 0; i < sel.options.length; i++) {
+            var o = sel.options[i];
+            var row = document.createElement("div");
+            row.className = "dd-opt" + (o.value === sel.value ? " sel" : "");
+            row.textContent = o.text;
+            (function (optVal) {
+                row.onclick = function () {
+                    if (sel.value !== optVal) {
+                        sel.value = optVal;
+                        var ev; try { ev = new Event("change"); } catch (e) { ev = document.createEvent("HTMLEvents"); ev.initEvent("change", true, false); }
+                        sel.dispatchEvent(ev);
+                    }
+                    close(); renderBox();
+                };
+            })(o.value);
+            pop.appendChild(row);
+        }
+    }
+    function render() { renderBox(); if (isOpen()) { renderPop(); place(); } }
+
+    box.onclick = function () { if (sel.disabled) return; if (isOpen()) close(); else open(); };
+    document.addEventListener("mousedown", function (e) {
+        if (isOpen() && !wrap.contains(e.target) && !pop.contains(e.target)) close();
+    }, true);
+
+    sel._dd = { render: render };
+    render();
+}
+function syncDropdown(id) { var s = $(id); if (s && s._dd) s._dd.render(); }
 
 function toast(msg) {
     var t = $("toast");
@@ -491,9 +647,22 @@ function toast(msg) {
     toast._t = setTimeout(function () { t.className = ""; }, 2200);
 }
 
+function showBusy(msg) {
+    $("busy_msg").textContent = msg || t("applying");
+    $("busy").className = "show";
+}
+function hideBusy() { $("busy").className = ""; }
+
 function post(params) {
     return fetch(API, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams(params).toString() })
         .then(function (r) { return r.json(); });
+}
+// post that shows the busy overlay for the whole round-trip (used by the
+// "적용" buttons, which restart the service). Always clears the overlay.
+function postBusy(params, msg) {
+    showBusy(msg);
+    return post(params).then(function (r) { hideBusy(); return r; },
+                            function (e) { hideBusy(); throw e; });
 }
 function getJSON(action) {
     return fetch(API + "?action=" + action, { cache: "no-store" }).then(function (r) { return r.json(); });
@@ -726,11 +895,13 @@ function renderGeneral() {
         if (cur && !seen) opts += '<option value="' + esc(cur) + '">' + esc(cur) + ' ' + esc(t("iface_missing")) + '</option>';
         sel.innerHTML = opts;
         sel.value = cur;
+        syncDropdown("g_iface");
     }
 
     if (!busy) {
         $("g_hostname").value = s.hostname || "";
         $("g_enc").value = s.enc || "auto";
+        syncDropdown("g_enc");
         $("g_autoblock").checked = s.autoblock === "yes";
     }
     $("g_iface_ro").textContent = s.iface_name ? (s.iface_name + (s.iface_ip ? " (" + s.iface_ip + ")" : "")) : t("iface_none");
@@ -745,7 +916,7 @@ function renderGeneral() {
 }
 $("btn_general_reset").onclick = function () { renderGeneral(); };
 $("btn_general_apply").onclick = function () {
-    post({
+    postBusy({
         action: "save", scope: "general",
         hostname: $("g_hostname").value.trim(), enc: $("g_enc").value,
         iface: $("g_iface").value,
@@ -753,7 +924,7 @@ $("btn_general_apply").onclick = function () {
     }).then(function (r) {
         if (!r.success) { toast(r.error || t("fail")); return; }
         toast(t("settings_applied")); refresh();
-    });
+    }).catch(function () { toast(t("api_failed")); });
 };
 
 // -------------------------------------------------------------------- privileges (DSM accounts)
@@ -810,7 +981,7 @@ $("btn_priv_apply").onclick = function () {
     PRIV_USERS.forEach(function (u) { if (u.status === "normal" && PRIV_ALLOW[u.name]) allowed.push(u.name); });
     var btn = $("btn_priv_apply");
     btn.disabled = true;
-    post({ action: "vpnperm", users: allowed.join(",") }).then(function (r) {
+    postBusy({ action: "vpnperm", users: allowed.join(",") }).then(function (r) {
         btn.disabled = false;
         if (!r.success) { toast(r.error || t("fail")); return; }
         toast(t("priv_applied")); loadPrivilege(); refresh();
@@ -818,6 +989,43 @@ $("btn_priv_apply").onclick = function () {
 };
 
 // -------------------------------------------------------------------- server pages
+
+// DSM certificates available to present (loaded once, cached)
+var DSM_CERTS = null;
+function loadDsmCerts(cb) {
+    getJSON("dsmcerts").then(function (list) {
+        DSM_CERTS = Array.isArray(list) ? list : [];
+        if (cb) cb();
+    }).catch(function () { DSM_CERTS = []; if (cb) cb(); });
+}
+// fill the server-cert dropdown with the DSM certificates only. An empty
+// stored value means "DSM's default certificate", which is pre-selected. A
+// selected id that no longer exists in DSM is kept visible so it isn't lost.
+function populateCertSelect(currentId) {
+    var sel = $("sv_cert");
+    if (DSM_CERTS === null) {   // not loaded yet - fetch then re-render
+        sel.innerHTML = "";
+        syncDropdown("sv_cert");
+        loadDsmCerts(function () { populateCertSelect(currentId); });
+        return;
+    }
+    var certs = DSM_CERTS;
+    if (!certs.length) {        // DSM has no certificate -> temporary cert is used
+        sel.innerHTML = '<option value="">' + esc(t("cert_none")) + '</option>';
+        syncDropdown("sv_cert");
+        return;
+    }
+    var eff = currentId || (STATE && STATE.dsm_cert_default) || "";
+    var html = "", found = false;
+    certs.forEach(function (c) {
+        if (c.id === eff) found = true;
+        html += '<option value="' + esc(c.id) + '">' + esc(c.label || c.id) + '</option>';
+    });
+    if (eff && !found) html += '<option value="' + esc(eff) + '">' + esc(eff) + ' ' + esc(t("cert_missing")) + '</option>';
+    sel.innerHTML = html;
+    sel.value = eff || (certs[0] && certs[0].id) || "";
+    syncDropdown("sv_cert");
+}
 
 function renderServerPage(m) {
     var s = STATE; if (!s) return;
@@ -829,8 +1037,16 @@ function renderServerPage(m) {
 
     if (document.activeElement.tagName !== "INPUT" && document.activeElement.tagName !== "SELECT") {
         $("sv_enabled").checked = s[def.enField] === "yes";
-        $("sv_subnet").value = s[def.subnetField] || "";
-        $("sv_dns").value = s[def.dnsField] || "";
+        // subnet is a fixed /24: split "a.b.c.0/24" into the first three octets
+        var oct = (s[def.subnetField] || "").split("/")[0].split(".");
+        $("sv_ip1").value = oct[0] || "";
+        $("sv_ip2").value = oct[1] || "";
+        $("sv_ip3").value = oct[2] || "";
+        // empty stored DNS = automatic (use Synology server DNS)
+        var dns = s[def.dnsField] || "";
+        $("sv_dns_manual").checked = dns !== "";
+        $("sv_dns").value = dns !== "" ? dns : (s.server_dns || "");
+        syncDnsRow();
         if (def.psk) $("sv_psk").value = "";
     }
     $("sv_psk").placeholder = s.psk ? t("psk_set") : t("ph_psk_auto");
@@ -840,7 +1056,7 @@ function renderServerPage(m) {
     $("row_clientca").className = "form-row" + (def.clientca ? "" : " hidden");
 
     if (def.cert) {
-        $("sv_cert_ro").textContent = (s.cert_cn || "-") + (s.cert_self_signed === "yes" ? t("selfsigned_suffix") : "");
+        populateCertSelect(def.certField ? (s[def.certField] || "") : "");
     }
     if (def.clientca) {
         $("sv_clientca_ro").textContent = s.clientca_cn || t("clientca_notissued");
@@ -884,20 +1100,42 @@ function downloadProfile(type) {
     f.submit();
 }
 
+// enable the DNS address field only when "수동 DNS 사용" is checked; when
+// automatic, disable it and show the Synology server DNS that will be used
+function syncDnsRow() {
+    var manual = $("sv_dns_manual").checked;
+    $("sv_dns").disabled = !manual;
+    if (!manual) $("sv_dns").value = (STATE && STATE.server_dns) || "";
+}
+$("sv_dns_manual").onchange = syncDnsRow;
+// keep octet inputs numeric (0-255)
+["sv_ip1", "sv_ip2", "sv_ip3"].forEach(function (id) {
+    $(id).oninput = function () {
+        var v = this.value.replace(/[^0-9]/g, "");
+        if (v !== "" && parseInt(v, 10) > 255) v = "255";
+        this.value = v;
+    };
+});
+
 $("btn_server_reset").onclick = function () { renderServerPage(PAGE); };
 $("btn_server_apply").onclick = function () {
     var def = SERVER_DEFS[PAGE];
+    var o1 = $("sv_ip1").value.trim(), o2 = $("sv_ip2").value.trim(), o3 = $("sv_ip3").value.trim();
+    if (o1 === "" || o2 === "" || o3 === "") { toast(t("subnet_incomplete")); return; }
+    var manual = $("sv_dns_manual").checked;
     var params = {
         action: "save", scope: PAGE,
         enabled: $("sv_enabled").checked ? "yes" : "no",
-        subnet: $("sv_subnet").value.trim(),
-        dns: $("sv_dns").value.trim()
+        subnet: o1 + "." + o2 + "." + o3 + ".0/24",
+        dns_manual: manual ? "yes" : "no",
+        dns: manual ? $("sv_dns").value.trim() : ""
     };
     if (def.psk) params.psk = $("sv_psk").value;
-    post(params).then(function (r) {
+    if (def.cert) params.cert = $("sv_cert").value;
+    postBusy(params).then(function (r) {
         if (!r.success) { toast(r.error || t("fail")); return; }
         toast(t("settings_applied")); refresh();
-    });
+    }).catch(function () { toast(t("api_failed")); });
 };
 
 function renderCerts() {
@@ -936,20 +1174,34 @@ $("btn_cert_issue").onclick = function () {
 // -------------------------------------------------------------------- init
 
 $("btn_svc_enable").onclick = function () {
-    post({ action: "enable" }).then(function (r) {
+    postBusy({ action: "enable" }, t("svc_starting")).then(function (r) {
         if (!r.success) { toast(r.error || t("enable_failed")); return; }
         toast(t("enabled_ok")); refresh();
-    });
+    }).catch(function () { toast(t("api_failed")); });
 };
 $("btn_svc_disable").onclick = function () {
     if (!confirm(t("confirm_disable"))) return;
-    post({ action: "disable" }).then(function () { toast(t("disabled_ok")); refresh(); });
+    postBusy({ action: "disable" }, t("svc_stopping")).then(function () {
+        toast(t("disabled_ok")); refresh();
+    }).catch(function () { toast(t("api_failed")); });
 };
 
-$("btn_refresh").onclick = refresh;
+// top-right button restarts the VPN service (drops connections briefly); the
+// 15s auto-refresh keeps the view current on its own
+$("btn_refresh").onclick = function () {
+    if (!STATE || STATE.enabled !== "yes") { toast(t("svc_not_running")); return; }
+    if (!confirm(t("confirm_restart"))) return;
+    postBusy({ action: "restart" }, t("svc_restarting")).then(function (r) {
+        if (!r.success) { toast(r.error || t("fail")); return; }
+        toast(t("svc_restarted")); refresh();
+    }).catch(function () { toast(t("api_failed")); });
+};
 applyStaticI18n();
+["g_enc", "g_iface", "f_log_proto", "sv_cert"].forEach(function (id) { enhanceSelect($(id)); });
 go("overview");
-refresh();
+// wait overlay for the initial status load; the 15s auto-refresh stays silent
+showBusy(t("loading"));
+refresh().then(hideBusy, hideBusy);
 setInterval(refresh, 15000);
 </script>
 </body>
