@@ -647,6 +647,17 @@ server_dns() {
 # the NAS's own resolvers (automatic DNS).
 pool_dns() { [ -n "$1" ] && printf '%s\n' "$1" || server_dns; }
 
+# address range to hand out from a /24 client pool. strongSwan would otherwise
+# assign the very first address (x.x.x.1); the iOS built-in IKEv2 client is
+# known to establish the tunnel but never route data when handed x.x.x.1, so
+# start the pool at .2. Non-/24 values pass through unchanged.
+pool_range() {
+    case "$1" in
+        *.0/24) _pfx=${1%.0/24}; printf '%s.2-%s.254\n' "$_pfx" "$_pfx" ;;
+        *)      printf '%s\n' "$1" ;;
+    esac
+}
+
 # render ${ETC}/swanctl/swanctl.conf - connection/pool/secret definitions,
 # loaded live via 'swanctl --load-all' (no daemon restart needed)
 render_swanctl_conf() {
@@ -685,6 +696,7 @@ render_swanctl_conf() {
         encap = yes
         dpd_delay = 30s
         pools = pool-ikev2
+        send_cert = always
         local {
             auth = pubkey
             certs = server-cert-mschapv2.pem
@@ -704,7 +716,10 @@ render_swanctl_conf() {
         }
     }"
         POOLS="${POOLS}
-    pool-ikev2 { addrs = ${IKEV2_SUBNET_MSCHAPV2}, dns = $(pool_dns "$IKEV2_DNS_MSCHAPV2") }"
+    pool-ikev2 {
+        addrs = $(pool_range "$IKEV2_SUBNET_MSCHAPV2")
+        dns = $(pool_dns "$IKEV2_DNS_MSCHAPV2")
+    }"
 
         SECRETS="${SECRETS}
     private-server-mschapv2 { file = server-key-mschapv2.pem }
@@ -739,7 +754,10 @@ $(dsm_ntlm_secrets)"
         }
     }"
         POOLS="${POOLS}
-    pool-ikev2-psk { addrs = ${IKEV2_SUBNET_PSK}, dns = $(pool_dns "$IKEV2_DNS_PSK") }"
+    pool-ikev2-psk {
+        addrs = $(pool_range "$IKEV2_SUBNET_PSK")
+        dns = $(pool_dns "$IKEV2_DNS_PSK")
+    }"
         PSKESC=$(printf '%s' "$IKEV2_PSK" | sed 's/"/\\"/g')
         SECRETS="${SECRETS}
     ike-psk { secret = \"${PSKESC}\" }"
@@ -757,6 +775,7 @@ $(dsm_ntlm_secrets)"
         encap = yes
         dpd_delay = 30s
         pools = pool-ikev2-rsa
+        send_cert = always
         local {
             auth = pubkey
             certs = server-cert-rsa.pem
@@ -776,7 +795,10 @@ $(dsm_ntlm_secrets)"
         }
     }"
         POOLS="${POOLS}
-    pool-ikev2-rsa { addrs = ${IKEV2_SUBNET_RSA}, dns = $(pool_dns "$IKEV2_DNS_RSA") }"
+    pool-ikev2-rsa {
+        addrs = $(pool_range "$IKEV2_SUBNET_RSA")
+        dns = $(pool_dns "$IKEV2_DNS_RSA")
+    }"
         SECRETS="${SECRETS}
     private-server-rsa { file = server-key-rsa.pem }"
     fi
@@ -793,6 +815,7 @@ $(dsm_ntlm_secrets)"
         encap = yes
         dpd_delay = 30s
         pools = pool-ikev2-eaptls
+        send_cert = always
         local {
             auth = pubkey
             certs = server-cert-eaptls.pem
@@ -813,7 +836,10 @@ $(dsm_ntlm_secrets)"
         }
     }"
         POOLS="${POOLS}
-    pool-ikev2-eaptls { addrs = ${IKEV2_SUBNET_EAPTLS}, dns = $(pool_dns "$IKEV2_DNS_EAPTLS") }"
+    pool-ikev2-eaptls {
+        addrs = $(pool_range "$IKEV2_SUBNET_EAPTLS")
+        dns = $(pool_dns "$IKEV2_DNS_EAPTLS")
+    }"
         SECRETS="${SECRETS}
     private-server-eaptls { file = server-key-eaptls.pem }"
     fi
