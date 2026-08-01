@@ -544,6 +544,7 @@ render_strongswan_conf() {
         echo "            path = ${CHARON_LOG}"
         echo "            time_format = %Y-%m-%d %H:%M:%S"
         echo "            append = yes"
+        echo "            flush_line = yes"
         echo "            default = 1"
         echo "            ike_name = yes"
         echo "        }"
