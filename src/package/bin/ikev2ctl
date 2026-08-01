@@ -918,13 +918,17 @@ nat_install() {
     # start clean so re-apply never duplicates
     nat_remove_quiet
 
-    # create our chains and hook them in
+    # create our chains and hook them in. Insert the jumps at the TOP of the
+    # built-in chains (-I ... 1) rather than appending, so our rules take
+    # priority over whatever DSM or other packages have already installed -
+    # e.g. a broad FORWARD DROP/REJECT would otherwise run first and block
+    # the client traffic before our ACCEPT is ever reached.
     iptables -t nat -N "$NAT_CHAIN" 2>/dev/null
     iptables -N "$FWD_CHAIN" 2>/dev/null
     iptables -t mangle -N "$MSS_CHAIN" 2>/dev/null
-    iptables -t nat -A POSTROUTING -j "$NAT_CHAIN" 2>/dev/null
-    iptables -A FORWARD -j "$FWD_CHAIN" 2>/dev/null
-    iptables -t mangle -A FORWARD -j "$MSS_CHAIN" 2>/dev/null
+    iptables -t nat -I POSTROUTING 1 -j "$NAT_CHAIN" 2>/dev/null
+    iptables -I FORWARD 1 -j "$FWD_CHAIN" 2>/dev/null
+    iptables -t mangle -I FORWARD 1 -j "$MSS_CHAIN" 2>/dev/null
 
     for net in $(enabled_subnets); do
         [ -n "$net" ] || continue
