@@ -539,6 +539,16 @@ render_strongswan_conf() {
         # routing/NAT ourselves (nat_install), so tell charon not to.
         echo "    install_routes = no"
         echo "    install_virtual_ip = no"
+        # send_cert=always makes every IKE_AUTH response carry the full
+        # certificate chain, so the response is IKE-fragmented (RFC 7383).
+        # charon's default fragment size (1280) plus IP/UDP/non-ESP headers
+        # exceeds the path MTU on many cellular links (CGNAT / IPv6 min-MTU
+        # 1280), where each fragment is then IP-fragmented and the mobile
+        # carrier drops the fragmented UDP - the client never sees the
+        # response and retransmits IKE_AUTH forever. Shrink the IKE fragment
+        # so each one fits (1200 + 4 + 8 + 20 = 1232 < 1280) without any
+        # IP-level fragmentation. LAN clients are unaffected.
+        echo "    fragment_size = 1200"
         echo "    filelog {"
         echo "        charon {"
         echo "            path = ${CHARON_LOG}"
