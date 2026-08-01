@@ -882,6 +882,17 @@ $(dsm_ntlm_secrets)"
 
 NAT_CHAIN="IKEV2VPN_MASQ"
 FWD_CHAIN="IKEV2VPN_FWD"
+MSS_CHAIN="IKEV2VPN_MSS"
+
+# TCP MSS to clamp forwarded client SYN/SYN-ACK down to. This is policy-based
+# IPsec with no virtual tunnel interface, so the forwarded inner packet routes
+# out the physical egress (MTU 1500) and --clamp-mss-to-pmtu would only ever
+# see 1500 - it cannot account for the ~70+ bytes of ESP + NAT-T overhead the
+# packet gains after encryption. So we clamp to a fixed value instead. 1360
+# keeps the post-encapsulation packet comfortably under a 1500 path and fixes
+# the "tunnel connects but TCP stalls / web won't load while DNS works"
+# symptom. Lower it (e.g. 1280) if a small-MTU cellular path still stalls.
+MSS_VALUE=1360
 
 # detected egress interface (the one with the default route to the internet)
 egress_iface() {
@@ -910,14 +921,22 @@ nat_install() {
     # create our chains and hook them in
     iptables -t nat -N "$NAT_CHAIN" 2>/dev/null
     iptables -N "$FWD_CHAIN" 2>/dev/null
+    iptables -t mangle -N "$MSS_CHAIN" 2>/dev/null
     iptables -t nat -A POSTROUTING -j "$NAT_CHAIN" 2>/dev/null
     iptables -A FORWARD -j "$FWD_CHAIN" 2>/dev/null
+    iptables -t mangle -A FORWARD -j "$MSS_CHAIN" 2>/dev/null
 
     for net in $(enabled_subnets); do
         [ -n "$net" ] || continue
         iptables -t nat -A "$NAT_CHAIN" -s "$net" -o "$IFACE" -j MASQUERADE 2>/dev/null
         iptables -A "$FWD_CHAIN" -s "$net" -j ACCEPT 2>/dev/null
         iptables -A "$FWD_CHAIN" -d "$net" -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null
+        # Clamp TCP MSS on connection setup packets to/from the client. The
+        # SYN,RST SYN match hits both the client's SYN (-s) and the server's
+        # returning SYN-ACK (-d), so both ends negotiate a small-enough MSS
+        # and full-size segments never get dropped inside the tunnel.
+        iptables -t mangle -A "$MSS_CHAIN" -s "$net" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss "$MSS_VALUE" 2>/dev/null
+        iptables -t mangle -A "$MSS_CHAIN" -d "$net" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss "$MSS_VALUE" 2>/dev/null
     done
     log "NAT/forwarding installed (egress ${IFACE})"
 }
@@ -933,10 +952,15 @@ nat_remove_quiet() {
     while iptables -C FORWARD -j "$FWD_CHAIN" 2>/dev/null; do
         iptables -D FORWARD -j "$FWD_CHAIN" 2>/dev/null || break
     done
+    while iptables -t mangle -C FORWARD -j "$MSS_CHAIN" 2>/dev/null; do
+        iptables -t mangle -D FORWARD -j "$MSS_CHAIN" 2>/dev/null || break
+    done
     iptables -t nat -F "$NAT_CHAIN" 2>/dev/null
     iptables -t nat -X "$NAT_CHAIN" 2>/dev/null
     iptables -F "$FWD_CHAIN" 2>/dev/null
     iptables -X "$FWD_CHAIN" 2>/dev/null
+    iptables -t mangle -F "$MSS_CHAIN" 2>/dev/null
+    iptables -t mangle -X "$MSS_CHAIN" 2>/dev/null
 }
 
 nat_remove() {
