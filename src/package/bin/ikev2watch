@@ -20,7 +20,6 @@ ETC="${PKG_DIR}/etc"
 VAR="${PKG_DIR}/var"
 LOG="${VAR}/ikev2.log"
 CHARON_LOG="${VAR}/charon.log"
-SETTINGS="${ETC}/settings.conf"
 PIDFILE="${VAR}/ikev2watch.pid"
 FAILDB="${VAR}/authfail.list"
 OFFSET_FILE="${VAR}/logoffset/charon.log"
@@ -38,10 +37,13 @@ EVENTS_MAX_LINES=2000
 AB_DB="/etc/synoautoblock.db"
 INTERVAL=20
 
+# package settings, read through the same loader ikev2ctl uses
+# (only ${ETC} has to be set beforehand)
+. "$(dirname "$0")/lib/settings.sh"
+
 IKEV2_AUTOBLOCK="no"
 read_pkg_settings() {
-    IKEV2_AUTOBLOCK="no"
-    [ -f "$SETTINGS" ] && . "$SETTINGS"
+    load_settings
 }
 
 log() {
