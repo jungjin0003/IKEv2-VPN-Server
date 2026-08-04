@@ -15,13 +15,13 @@ do_events() {
     printf ']'
 }
 
-do_events_clear() {
+do_eventsclear() {
     require_post
     "$AS" ikev2watch events-clear >/dev/null 2>&1
     json_ok
 }
 
-do_export_log() {
+do_exportlog() {
     printf 'Content-Type: text/plain; charset=utf-8\r\n'
     printf 'Content-Disposition: attachment; filename="ikev2-log.txt"\r\n\r\n'
     "$AS" ikev2ctl log-dump 2>/dev/null

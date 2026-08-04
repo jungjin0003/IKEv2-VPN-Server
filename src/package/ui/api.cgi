@@ -5,7 +5,9 @@
 #
 # This file only holds what every handler needs - request parsing, the JSON
 # helpers and the privileged-call wrappers. The handlers themselves live in
-# api.d/, one file per area; they are loaded before the dispatch below.
+# api.d/, one file per area, each defining do_<action> for the actions it
+# serves; they are loaded and dispatched to by name at the bottom, so adding
+# an action never means editing this file.
 
 PKG="IKEv2VPN"
 PKG_DIR="/var/packages/${PKG}"
@@ -84,23 +86,11 @@ for _h in "${API_D}"/*.sh; do
     [ -f "$_h" ] && . "$_h"
 done
 
-case "$ACTION" in
-    status)       do_status ;;
-    enable)       do_enable ;;
-    disable)      do_disable ;;
-    restart)      do_restart ;;
-    save)         do_save ;;
-    dsmusers)     do_dsmusers ;;
-    dsmcerts)     do_dsmcerts ;;
-    vpnperm)      do_vpnperm ;;
-    certissue)    do_certissue ;;
-    certdel)      do_certdel ;;
-    profile)      do_profile ;;
-    clients)      do_clients ;;
-    connections)  do_connections ;;
-    disconnect)   do_disconnect ;;
-    events)       do_events ;;
-    eventsclear)  do_events_clear ;;
-    exportlog)    do_export_log ;;
-    *)            json_err "unknown action" ;;
-esac
+# The action names a handler function directly, so accept only a plain name
+# and only run it when it resolved to one of the functions we just loaded:
+# 'command -v' prints the bare name for a shell function but an absolute path
+# for anything on $PATH, so a request can never reach an external command.
+printf '%s' "$ACTION" | grep -Eq '^[a-z][a-z0-9_]*$' || json_err "unknown action"
+[ "$(command -v "do_${ACTION}" 2>/dev/null)" = "do_${ACTION}" ] || json_err "unknown action"
+
+"do_${ACTION}"
