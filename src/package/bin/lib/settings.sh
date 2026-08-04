@@ -1,10 +1,18 @@
 # settings.sh - package settings loading.
 #
 # Depends only on ${ETC} being set by the caller, so the scripts that are not
-# built from the lib/ modules can source this file on its own and read
-# settings exactly the same way ikev2ctl does.
+# built from the lib/ modules (bin/ikev2watch, bin/genprofile) can source this
+# file on its own and read settings exactly the same way ikev2ctl does.
+#
+# Values come from three places, later ones winning:
+#   1. the built-in defaults below
+#   2. ${ETC}/settings.conf   - the settings the management UI writes
+#   3. ${ETC}/settings.d/*.conf - drop-ins, one file per feature
+# The drop-in directory means a feature can keep its own settings in its own
+# file instead of having every setting share one file.
 
 SETTINGS="${ETC}/settings.conf"
+SETTINGS_D="${ETC}/settings.d"
 
 load_settings() {
     # defaults - each auth method gets its own client IP pool/DNS so the 4
@@ -37,4 +45,11 @@ load_settings() {
     IKEV2_CERT_EAPTLS=""
 
     [ -f "$SETTINGS" ] && . "$SETTINGS"
+
+    # per-feature drop-ins, read in glob order
+    for _sf in "${SETTINGS_D}"/*.conf; do
+        [ -f "$_sf" ] && . "$_sf"
+    done
+
+    return 0
 }

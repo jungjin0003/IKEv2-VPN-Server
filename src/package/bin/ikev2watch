@@ -37,8 +37,8 @@ EVENTS_MAX_LINES=2000
 AB_DB="/etc/synoautoblock.db"
 INTERVAL=20
 
-# package settings, read through the same loader ikev2ctl uses
-# (only ${ETC} has to be set beforehand)
+# package settings, read through the same loader ikev2ctl uses so the
+# settings.d drop-ins apply here too (only ${ETC} has to be set beforehand)
 . "$(dirname "$0")/lib/settings.sh"
 
 IKEV2_AUTOBLOCK="no"

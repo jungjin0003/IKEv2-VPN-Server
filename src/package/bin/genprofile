@@ -7,8 +7,8 @@ PKG_DIR="/var/packages/${PKG}"
 ETC="${PKG_DIR}/etc"
 CERT_DIR="${ETC}/cert"
 
-# package settings, read through the same loader ikev2ctl uses
-# (only ${ETC} has to be set beforehand)
+# package settings, read through the same loader ikev2ctl uses so the
+# settings.d drop-ins apply here too (only ${ETC} has to be set beforehand)
 . "$(dirname "$0")/lib/settings.sh"
 
 IKEV2_SUBNET="10.9.0.0/24"

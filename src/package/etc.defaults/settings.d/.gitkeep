@@ -1,0 +1,7 @@
+# Per-feature settings drop-ins.
+#
+# Files placed here as <feature>.conf are copied to
+# /var/packages/IKEv2VPN/etc/settings.d/ on install and are read by
+# load_settings() (bin/lib/settings.sh) after settings.conf, so a feature can
+# keep its own settings in its own file instead of adding them to the shared
+# settings.conf.
