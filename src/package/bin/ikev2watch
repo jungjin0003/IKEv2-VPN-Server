@@ -1,6 +1,6 @@
 #!/bin/sh
 # ikev2watch - IKEv2 log watcher: structured connection event log (used by
-# the management UI's "로그" page) + optional DSM Auto Block integration.
+# the management UI's "Log" page) + optional DSM Auto Block integration.
 #
 # Parses our own bundled charon's log (${VAR}/charon.log, written by the
 # filelog plugin per the strongswan.conf ikev2ctl generates) for
@@ -20,7 +20,6 @@ ETC="${PKG_DIR}/etc"
 VAR="${PKG_DIR}/var"
 LOG="${VAR}/ikev2.log"
 CHARON_LOG="${VAR}/charon.log"
-SETTINGS="${ETC}/settings.conf"
 PIDFILE="${VAR}/ikev2watch.pid"
 FAILDB="${VAR}/authfail.list"
 OFFSET_FILE="${VAR}/logoffset/charon.log"
@@ -29,7 +28,7 @@ OFFSET_FILE="${VAR}/logoffset/charon.log"
 # IKE_SA_INIT); the later "established"/"deleted" lines carry the IP only in
 # "[identity]" form or not at all - so without remembering the IP per IKE_SA
 # id between passes, connect/disconnect events would be dropped (which is
-# exactly why the UI 로그 page only ever showed auth failures).
+# exactly why the UI Log page only ever showed auth failures).
 ADDR_STATE="${VAR}/logoffset/ikeaddr"
 ADDR_MAX_LINES=500
 EVENTS_LOG="${VAR}/events.log"
@@ -38,10 +37,13 @@ EVENTS_MAX_LINES=2000
 AB_DB="/etc/synoautoblock.db"
 INTERVAL=20
 
+# package settings, read through the same loader ikev2ctl uses so the
+# settings.d drop-ins apply here too (only ${ETC} has to be set beforehand)
+. "$(dirname "$0")/lib/settings.sh"
+
 IKEV2_AUTOBLOCK="no"
 read_pkg_settings() {
-    IKEV2_AUTOBLOCK="no"
-    [ -f "$SETTINGS" ] && . "$SETTINGS"
+    load_settings
 }
 
 log() {
@@ -144,7 +146,7 @@ denied_ips() {
 # (${CHARON_LOG}, filelog plugin, format fixed by the strongswan.conf
 # ikev2ctl generates: "%Y-%m-%d %H:%M:%S <lvl>[<sub>] <connname|N> ...").
 # On a recognized event, both (a) appends a structured
-# "time|proto|user|event|ip" line to EVENTS_LOG for the UI's 로그 page and
+# "time|proto|user|event|ip" line to EVENTS_LOG for the UI's Log page and
 # (b) echoes bare failure IPs to stdout for the auto-block counter.
 
 scan_ike_log() {
@@ -234,7 +236,7 @@ scan_ike_log() {
 scan_failures() { scan_ike_log; }
 
 record_failures() {
-    # scan_ike_log() always runs (writes events.log for the UI's 로그 page);
+    # scan_ike_log() always runs (writes events.log for the UI's Log page);
     # only register with DSM auto-block when the package setting is on.
     NOW=$(date +%s)
     NEW=$(scan_failures)
@@ -288,7 +290,7 @@ do_run() {
             read_pkg_settings
             T=300
         fi
-        # always runs: writes events.log for the UI's 로그 page, and (only
+        # always runs: writes events.log for the UI's Log page, and (only
         # when IKEV2_AUTOBLOCK=yes and DSM auto-block is enabled) registers
         # offenders in DSM's auto-block DB
         record_failures

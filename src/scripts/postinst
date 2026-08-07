@@ -11,6 +11,14 @@ mkdir -p "$ETC" "$VAR"
 if [ ! -f "${ETC}/settings.conf" ] && [ -f "${TARGET}/etc.defaults/settings.conf" ]; then
     cp "${TARGET}/etc.defaults/settings.conf" "${ETC}/settings.conf"
 fi
+
+# Per-feature settings drop-ins (read after settings.conf by load_settings).
+# Seed only the files that are missing, so user edits are kept.
+mkdir -p "${ETC}/settings.d"
+for f in "${TARGET}/etc.defaults/settings.d/"*.conf; do
+    [ -f "$f" ] || continue
+    [ -f "${ETC}/settings.d/$(basename "$f")" ] || cp "$f" "${ETC}/settings.d/"
+done
 [ -f "${ETC}/users.conf" ] || : > "${ETC}/users.conf"
 chmod 600 "${ETC}/users.conf" 2>/dev/null
 

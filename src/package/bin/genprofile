@@ -6,13 +6,15 @@ PKG="IKEv2VPN"
 PKG_DIR="/var/packages/${PKG}"
 ETC="${PKG_DIR}/etc"
 CERT_DIR="${ETC}/cert"
-SETTINGS="${ETC}/settings.conf"
+
+# package settings, read through the same loader ikev2ctl uses so the
+# settings.d drop-ins apply here too (only ${ETC} has to be set beforehand)
+. "$(dirname "$0")/lib/settings.sh"
 
 IKEV2_SUBNET="10.9.0.0/24"
 IKEV2_DNS1="8.8.8.8"
 IKEV2_DNS2=""
-IKEV2_HOSTNAME=""
-[ -f "$SETTINGS" ] && . "$SETTINGS"
+load_settings
 
 TYPE="$1"
 VPN_USER="$2"

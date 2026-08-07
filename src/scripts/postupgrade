@@ -9,4 +9,16 @@ if [ -d "${BACKUP}/etc" ]; then
     cp -a "${BACKUP}/etc" "${PKG_DIR}/etc"
     rm -rf "$BACKUP"
 fi
+
+# The restore above replaces etc wholesale, which also discards the settings
+# drop-ins postinst just seeded. Put back any file the new version ships that
+# this installation does not have yet (existing files are left untouched).
+ETC="${PKG_DIR}/etc"
+TARGET="${SYNOPKG_PKGDEST:-${PKG_DIR}/target}"
+mkdir -p "${ETC}/settings.d"
+for f in "${TARGET}/etc.defaults/settings.d/"*.conf; do
+    [ -f "$f" ] || continue
+    [ -f "${ETC}/settings.d/$(basename "$f")" ] || cp "$f" "${ETC}/settings.d/"
+done
+
 exit 0
