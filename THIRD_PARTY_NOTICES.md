@@ -5,7 +5,7 @@ This package (IKEv2 VPN Server for Synology DSM) is distributed under the
 (GPL-2.0-or-later)**. See [`LICENSE`](LICENSE) for the full GPLv2 text.
 
     IKEv2 VPN Server — a DSM package adding an IKEv2/IPsec VPN server
-    Copyright (C) 2026 jungjin00031
+    Copyright (C) 2026 jungjin0003 (CrazyHacker)
 
     This program is free software; you can redistribute it and/or modify it
     under the terms of the GNU General Public License as published by the Free

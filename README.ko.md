@@ -73,4 +73,4 @@ GMP(LGPL/GPL)는 번들 없이 동적 링크만 합니다. 제3자
 고지와 소스 제공 서면 오퍼는 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)를
 참고하세요.
 
-- Copyright (C) 2026 jungjin00031
+- Copyright (C) 2026 jungjin0003 (CrazyHacker)
