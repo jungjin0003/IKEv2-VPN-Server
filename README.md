@@ -63,6 +63,6 @@ Logging in with DSM user accounts over MSCHAPv2 (username/password) requires the
 
 ## License
 
-This package is distributed under **GPL-2.0-or-later** ([`LICENSE`](LICENSE)). It bundles the `charon`/`swanctl` binaries of strongSwan 6.0.7 (GPL-2.0-or-later, with the OpenSSL linking exception); GMP (LGPL/GPL) is only dynamically linked, not bundled. For the third-party notices and the written offer for corresponding source, see [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
+This package is distributed under **GPL-2.0-or-later** ([`LICENSE`](LICENSE)). It bundles the `charon`/`swanctl` binaries of strongSwan 6.0.7 (GPL-2.0-or-later, with the OpenSSL linking exception) and, for the management UI, the Preact + htm bundle (MIT / Apache-2.0); GMP (LGPL/GPL) is only dynamically linked, not bundled. For the third-party notices and the written offer for corresponding source, see [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
 
 - Copyright (C) 2026 jungjin00031

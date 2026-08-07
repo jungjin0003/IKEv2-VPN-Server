@@ -68,7 +68,8 @@ MSCHAPv2(ID/PW) 인증 방식을 이용해 DSM 사용자 계정을 통해 로그
 
 이 패키지는 **GPL-2.0-or-later**로 배포됩니다 ([`LICENSE`](LICENSE)).
 strongSwan 6.0.7(GPL-2.0-or-later, OpenSSL 링크 예외)의 `charon`/`swanctl`
-바이너리를 번들하며, GMP(LGPL/GPL)는 번들 없이 동적 링크만 합니다. 제3자
+바이너리와 관리 UI가 사용하는 Preact + htm 번들(MIT / Apache-2.0)을 번들하며,
+GMP(LGPL/GPL)는 번들 없이 동적 링크만 합니다. 제3자
 고지와 소스 제공 서면 오퍼는 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)를
 참고하세요.
 
