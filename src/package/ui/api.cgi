@@ -1,7 +1,11 @@
 #!/bin/sh
-# api.cgi - IKEv2 VPN Server management API (behind DSM login).
+# api.cgi - IKEv2 VPN Server management API.
 # Runs as the package user on DSM 7; privileged operations go through
 # bin/asroot (sudo rule installed once by 'ikev2-setup install').
+#
+# DSM does not gate what it serves from /webman/3rdparty/, so the DSM session
+# is established here, by lib/auth.sh, before any handler is loaded. Nothing
+# below the gate runs for a caller without one.
 #
 # This file only holds what every handler needs - request parsing, the JSON
 # helpers and the privileged-call wrappers. The handlers themselves live in
@@ -59,11 +63,39 @@ param() {
     urldecode "$_v"
 }
 
+# ----------------------------------------------------------------- auth gate
+
+# Nothing has been read from the client yet. The session is established from
+# the query string alone, so an unauthenticated caller never gets a request
+# body buffered on its behalf - the download path puts its token there for
+# exactly this reason, a form being unable to set a header.
+QS="${QUERY_STRING:-}"
+DATA="$QS"
+
+. "${TARGET}/lib/auth.sh"
+
+if ! web_authenticate "$(param SynoToken)"; then
+    printf 'Status: 403 Forbidden\r\n'
+    json_headers
+    printf '{"success":false,"error":"not authenticated"}'
+    exit 0
+fi
+
 # ---------------------------------------------------------------- read input
 
-QS="${QUERY_STRING:-}"
 BODY=""
 if [ "${REQUEST_METHOD:-GET}" = "POST" ] && [ -n "${CONTENT_LENGTH:-}" ]; then
+    # bound what is read into a shell variable; the largest legitimate request
+    # is the privileges list and sits far below this
+    case "$CONTENT_LENGTH" in
+        "" | *[!0-9]*) CONTENT_LENGTH=0 ;;
+    esac
+    if [ "$CONTENT_LENGTH" -gt 65536 ]; then
+        printf 'Status: 413 Payload Too Large\r\n'
+        json_headers
+        printf '{"success":false,"error":"request too large"}'
+        exit 0
+    fi
     BODY=$(head -c "$CONTENT_LENGTH" 2>/dev/null)
 fi
 DATA="${QS}&${BODY}"
