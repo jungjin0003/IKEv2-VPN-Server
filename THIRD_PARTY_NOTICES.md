@@ -75,6 +75,24 @@ required notices:
 
 ---
 
+## 3. Preact + htm (bundled — management UI)
+
+- **Version:** the `htm/preact/standalone` build from htm 3.1.1, which bundles
+  Preact, its hooks and htm's tagged-template renderer into one ES module.
+- **Files:** `target/ui/vendor/preact-standalone.module.js`
+  (SHA-256 `72284e8e9079c87817145df1110f74e8a2aa040b2fc384922e18dfcb46fc1fd7`).
+- **License:** Preact is MIT — see
+  [`licenses/preact-LICENSE.txt`](licenses/preact-LICENSE.txt);
+  htm is Apache-2.0 — see [`licenses/htm-LICENSE.txt`](licenses/htm-LICENSE.txt).
+- **Copyright:** © 2015-present Jason Miller and the Preact contributors.
+- **Upstream / source:** <https://preactjs.com/> · <https://github.com/preactjs/preact>
+  · <https://github.com/developit/htm> · bundle
+  <https://unpkg.com/htm@3.1.1/preact/standalone.module.js>.
+- **Modifications:** none. The file is the published bundle, vendored verbatim
+  so the package needs no build tooling and loads nothing from the network.
+
+---
+
 ## Icon
 
 The package icon (`icon.png` and the generated `PACKAGE_ICON*.PNG` /
