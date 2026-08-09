@@ -1,4 +1,9 @@
 # settings.sh - reading, validating and writing ${ETC}/settings.conf.
+#
+# The file is parsed rather than sourced, through the same reader bin/ikev2ctl
+# uses, so nothing already stored in it becomes shell input when this page
+# loads the current values.
+. "${TARGET}/bin/lib/settings.sh"
 
 SETTINGS="${ETC}/settings.conf"
 
@@ -7,6 +12,20 @@ valid_ip()   { printf '%s' "$1" | grep -Eq '^[0-9]{1,3}(\.[0-9]{1,3}){3}$'; }
 valid_subnet24() { printf '%s' "$1" | grep -Eq '^[0-9]{1,3}(\.[0-9]{1,3}){2}\.0/24$'; }
 # DSM certificate archive id (empty = system default)
 valid_certid() { printf '%s' "$1" | grep -Eq '^[A-Za-z0-9._-]{0,40}$'; }
+# Pre-shared key. The value is written into three different kinds of document,
+# so it is held to what is safe in all of them: printable ASCII without space,
+# which leaves out the CR and LF that would break settings.conf's KEY="value"
+# line; no quote or backslash, which would break the swanctl.conf secret; no
+# backtick or dollar, which carry meaning to a shell; and no <, > or & , which
+# genprofile drops unescaped into the iOS mobileconfig's XML.
+valid_psk() {
+    case "$1" in
+        *[!!-~]*)                      return 1 ;;
+        *\"* | *\\* | *'`'* | *'$'*)   return 1 ;;
+        *'<'* | *'>'* | *'&'*)         return 1 ;;
+    esac
+    return 0
+}
 # resolve the DNS setting from the manual/auto pair: manual requires a valid
 # IP; auto stores an empty value (the daemon then pushes the NAS's own DNS)
 resolve_dns() {
@@ -29,7 +48,7 @@ load_current_settings() {
     IKEV2_SUBNET_RSA="10.12.0.0/24"; IKEV2_DNS_RSA="8.8.8.8"; IKEV2_CERT_RSA=""
     IKEV2_ENABLE_EAPTLS="no"
     IKEV2_SUBNET_EAPTLS="10.13.0.0/24"; IKEV2_DNS_EAPTLS="8.8.8.8"; IKEV2_CERT_EAPTLS=""
-    [ -f "$SETTINGS" ] && . "$SETTINGS"
+    read_settings_file "$SETTINGS"
 }
 
 write_settings() {
@@ -94,11 +113,16 @@ do_save() {
         EN=$(param enabled); [ "$EN" = "yes" ] || EN="no"
         SUBNET=$(param subnet); resolve_dns; PSK=$(param psk)
         valid_subnet24 "$SUBNET" || json_err "invalid IP range (expected x.x.x.0/24)"
+        [ "$EN" = "yes" ] && [ -z "$PSK" ] \
+            && PSK=$(openssl rand -base64 24 | tr -d '=+/' | cut -c1-24)
+        # checked whether or not the method is enabled: the value is written to
+        # settings.conf either way, so leaving it unchecked when disabled only
+        # meant storing it unchecked
+        valid_psk "$PSK" \
+            || json_err "PSK must not contain quote, backslash, space or a control character"
         if [ "$EN" = "yes" ]; then
-            [ -n "$PSK" ] || PSK=$(openssl rand -base64 24 | tr -d '=+/' | cut -c1-24)
             [ ${#PSK} -ge 8 ]  || json_err "PSK too short (min 8)"
             [ ${#PSK} -le 64 ] || json_err "PSK too long (max 64)"
-            case "$PSK" in *\"*|*\\*|*\ *) json_err "PSK must not contain quote, backslash or space" ;; esac
         fi
         IKEV2_ENABLE_PSK="$EN"; IKEV2_PSK="$PSK"
         IKEV2_SUBNET_PSK="$SUBNET"; IKEV2_DNS_PSK="$DNS"
