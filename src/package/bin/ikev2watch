@@ -9,8 +9,8 @@
 # setting. When IKEV2_AUTOBLOCK=yes, also counts failures per source IP
 # using DSM's own auto-block threshold settings (Control Panel > Security >
 # Protection) and registers offenders in the DSM auto-block DB
-# (/etc/synoautoblock.db). Registration only - enforcement is left
-# entirely to DSM.
+# (/etc/synoautoblock.db). The package also mirrors active denied entries
+# into its own INPUT chain so IKEv2 traffic is rejected before charon.
 #
 # usage: ikev2watch start|stop|run|status
 
@@ -35,6 +35,7 @@ EVENTS_LOG="${VAR}/events.log"
 EVENTS_MAX_LINES=2000
 
 AB_DB="/etc/synoautoblock.db"
+BLOCK_CHAIN="IKEV2VPN_BLOCK"
 INTERVAL=20
 
 # package settings, read through the same loader ikev2ctl uses so the
@@ -97,6 +98,18 @@ ipstd() {
         '{printf "0000:0000:0000:0000:0000:FFFF:%02X%02X:%02X%02X", $1, $2, $3, $4}'
 }
 
+valid_ipv4() {
+    printf '%s' "$1" | awk -F. '
+        BEGIN { ok = 1 }
+        NF != 4 { ok = 0 }
+        {
+            for (i = 1; i <= 4; i++) {
+                if ($i !~ /^[0-9]+$/ || $i > 255) ok = 0
+            }
+        }
+        END { exit (ok == 1 ? 0 : 1) }
+    '
+}
 whitelist_table() {
     SQLITE=$(find_sqlite); [ -n "$SQLITE" ] || return 1
     "$SQLITE" "$AB_DB" "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE '%White%';" 2>/dev/null | head -n 1
@@ -112,6 +125,7 @@ is_whitelisted() {
 
 db_block() {
     IP="$1"
+    valid_ipv4 "$IP" || return 1
     SQLITE=$(find_sqlite)
     [ -n "$SQLITE" ] && [ -f "$AB_DB" ] || return 1
     NOW=$(date +%s)
@@ -139,11 +153,81 @@ db_block() {
 
 denied_ips() {
     SQLITE=$(find_sqlite)
-    [ -n "$SQLITE" ] && [ -f "$AB_DB" ] || return 0
+    [ -n "$SQLITE" ] && [ -f "$AB_DB" ] || return 1
     NOW=$(date +%s)
     "$SQLITE" "$AB_DB" \
         "SELECT IP FROM AutoBlockIP WHERE Deny=1 AND (ExpireTime=0 OR ExpireTime>$NOW);" 2>/dev/null \
-        | grep -E '^([0-9]{1,3}\.){3}[0-9]{1,3}$'
+        | while IFS= read -r IP; do
+            valid_ipv4 "$IP" && printf '%s\n' "$IP"
+        done
+}
+
+# --------------------------------------------------------- VPN-side blocking
+#
+# DSM's auto-block database protects DSM services, but it does not necessarily
+# stop packets before they reach this package's charon listener. Keep a small,
+# package-owned INPUT chain in sync with the same database so denied addresses
+# are rejected on UDP 500/4500 and native ESP (protocol 50) as well.
+
+iptables_bin() {
+    command -v iptables 2>/dev/null
+}
+
+block_remove() {
+    [ "$(id -u)" = "0" ] || return 0
+    IPT=$(iptables_bin); [ -n "$IPT" ] || return 0
+
+    while "$IPT" -C INPUT -j "$BLOCK_CHAIN" 2>/dev/null; do
+        "$IPT" -D INPUT -j "$BLOCK_CHAIN" 2>/dev/null || break
+    done
+    "$IPT" -F "$BLOCK_CHAIN" 2>/dev/null
+    "$IPT" -X "$BLOCK_CHAIN" 2>/dev/null
+}
+
+block_prepare() {
+    [ "$(id -u)" = "0" ] || return 0
+    IPT=$(iptables_bin); [ -n "$IPT" ] || return 0
+
+    "$IPT" -N "$BLOCK_CHAIN" 2>/dev/null
+    # Reinsert our jump at the top so a broad DSM INPUT policy cannot accept
+    # the packet before the package-owned deny rules see it.
+    while "$IPT" -C INPUT -j "$BLOCK_CHAIN" 2>/dev/null; do
+        "$IPT" -D INPUT -j "$BLOCK_CHAIN" 2>/dev/null || break
+    done
+    "$IPT" -I INPUT 1 -j "$BLOCK_CHAIN" 2>/dev/null || return 1
+}
+
+block_add() {
+    IP="$1"
+    IPT=$(iptables_bin)
+    [ -n "$IPT" ] && valid_ipv4 "$IP" || return 1
+
+    "$IPT" -A "$BLOCK_CHAIN" -s "$IP" -p udp --dport 500 -j DROP 2>/dev/null || return 1
+    "$IPT" -A "$BLOCK_CHAIN" -s "$IP" -p udp --dport 4500 -j DROP 2>/dev/null || return 1
+    "$IPT" -A "$BLOCK_CHAIN" -s "$IP" -p 50 -j DROP 2>/dev/null || return 1
+}
+
+sync_block_rules() {
+    [ "$(id -u)" = "0" ] || return 0
+    IPT=$(iptables_bin); [ -n "$IPT" ] || return 0
+
+    # Turning the package option off removes only this package's chain. DSM's
+    # own database and unrelated firewall rules are left untouched.
+    if [ "$IKEV2_AUTOBLOCK" != "yes" ]; then
+        block_remove
+        return 0
+    fi
+
+    IPS=$(denied_ips 2>/dev/null); RC=$?
+    # Do not clear a working deny chain just because DSM's database is
+    # temporarily unavailable or locked.
+    [ "$RC" -eq 0 ] || return 0
+
+    block_prepare || return 0
+    "$IPT" -F "$BLOCK_CHAIN" 2>/dev/null || return 0
+    for IP in $IPS; do
+        block_add "$IP" || log "WARN: failed to add VPN block rule for $IP"
+    done
 }
 
 # ------------------------------------------------------------ log scanning
@@ -308,6 +392,7 @@ do_run() {
         # when IKEV2_AUTOBLOCK=yes and DSM auto-block is enabled) registers
         # offenders in DSM's auto-block DB
         record_failures
+        sync_block_rules
         sleep "$INTERVAL"
         T=$((T - INTERVAL))
     done
@@ -326,6 +411,7 @@ do_stop() {
         kill "$P" 2>/dev/null
         rm -f "$PIDFILE"
     fi
+    block_remove
     log "watcher stopped"
 }
 

@@ -16,7 +16,8 @@ A third-party package that adds a standalone IKEv2/IPsec VPN server to Synology 
 
 ## Roadmap
 - We plan to support Synology NAS models on every feasible architecture in the future.
-- **※ The auto-blocking function is not working yet. ※**
+- The auto-blocking feature uses DSM Auto Block thresholds and rejects blocked
+  IKEv2 traffic at the package firewall.
 
 ## Supported authentication methods
 The services below can run simultaneously, each with its own **independent client IP range**.
