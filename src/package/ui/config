@@ -6,7 +6,7 @@
             "title": "IKEv2 VPN Server",
             "desc": "IKEv2 VPN Server",
             "icon": "images/icon_{0}.png",
-            "url": "webman/3rdparty/IKEv2VPN/index.html"
+            "url": "webman/3rdparty/IKEv2VPN/index.cgi"
         }
     }
 }

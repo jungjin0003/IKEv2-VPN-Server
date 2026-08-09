@@ -4,12 +4,30 @@ import { showBusy, hideBusy } from "./store.js";
 
 export const API = "api.cgi";
 
+// Nothing here carries the session token by hand. index.cgi's bootstrap put it
+// in a cookie, so the browser attaches it to everything on this path - these
+// requests, the download form's post, and the module imports that fetched this
+// file in the first place. A query string would not have survived those
+// imports, which resolve relative to the module's own URL.
+//
+// api.cgi answers 403 and nothing else once the token stops being accepted, so
+// reload: index.cgi is the way back in, and it either gets a fresh token or
+// says why it cannot.
+function check(r) {
+    if (r.status === 403) {
+        window.location.reload();
+        return new Promise(function () { /* never settles; the reload wins */ });
+    }
+    return r.json();
+}
+
 export function post(params) {
     return fetch(API, {
         method: "POST",
+        credentials: "same-origin",
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
         body: new URLSearchParams(params).toString()
-    }).then(function (r) { return r.json(); });
+    }).then(check);
 }
 
 // post that shows the busy overlay for the whole round-trip (used by the
@@ -23,8 +41,10 @@ export function postBusy(params, msg) {
 }
 
 export function getJSON(action) {
-    return fetch(API + "?action=" + action, { cache: "no-store" })
-        .then(function (r) { return r.json(); });
+    return fetch(API + "?action=" + action, {
+        cache: "no-store",
+        credentials: "same-origin"
+    }).then(check);
 }
 
 // Downloads (client profiles, .p12 certificates) are POSTs whose response is a
