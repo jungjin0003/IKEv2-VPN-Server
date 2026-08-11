@@ -151,15 +151,22 @@ db_block() {
     "$SQLITE" "$AB_DB" "INSERT OR REPLACE INTO AutoBlockIP ($C) VALUES ($V);" 2>/dev/null
 }
 
+# Succeeds when the database could be read, whatever it held. The rows are
+# taken first and filtered after, so the exit status is the query's and not
+# the last address's - the caller acts on the difference, and an address it
+# cannot use (an IPv6 entry, say) is not the same as a database it could not
+# reach.
 denied_ips() {
     SQLITE=$(find_sqlite)
     [ -n "$SQLITE" ] && [ -f "$AB_DB" ] || return 1
     NOW=$(date +%s)
-    "$SQLITE" "$AB_DB" \
-        "SELECT IP FROM AutoBlockIP WHERE Deny=1 AND (ExpireTime=0 OR ExpireTime>$NOW);" 2>/dev/null \
-        | while IFS= read -r IP; do
-            valid_ipv4 "$IP" && printf '%s\n' "$IP"
-        done
+    ROWS=$("$SQLITE" "$AB_DB" \
+        "SELECT IP FROM AutoBlockIP WHERE Deny=1 AND (ExpireTime=0 OR ExpireTime>$NOW);" \
+        2>/dev/null) || return 1
+    printf '%s\n' "$ROWS" | while IFS= read -r IP; do
+        valid_ipv4 "$IP" && printf '%s\n' "$IP"
+    done
+    return 0
 }
 
 # --------------------------------------------------------- VPN-side blocking
@@ -173,61 +180,107 @@ iptables_bin() {
     command -v iptables 2>/dev/null
 }
 
+# Two chains, one of them live at a time. A change is built in whichever is
+# idle and the jump is then moved onto it, so the addresses already denied
+# stay denied throughout - flushing the live chain and refilling it would
+# leave a gap on every pass.
+block_chains() {
+    printf '%s\n%s\n' "$BLOCK_CHAIN" "${BLOCK_CHAIN}2"
+}
+
+# The chain INPUT currently jumps to, if any.
+block_live() {
+    IPT=$(iptables_bin); [ -n "$IPT" ] || return 1
+    for C in $(block_chains); do
+        "$IPT" -C INPUT -j "$C" 2>/dev/null && { printf '%s\n' "$C"; return 0; }
+    done
+    return 1
+}
+
+# The addresses a chain denies, one per line, sorted - comparable with the
+# set that is wanted.
+block_contents() {
+    IPT=$(iptables_bin); [ -n "$IPT" ] || return 1
+    "$IPT" -S "$1" 2>/dev/null |
+        sed -n 's/^-A [^ ]* -s \([0-9.]*\)\(\/32\)\{0,1\} .*/\1/p' | sort -u
+}
+
 block_remove() {
     [ "$(id -u)" = "0" ] || return 0
     IPT=$(iptables_bin); [ -n "$IPT" ] || return 0
 
-    while "$IPT" -C INPUT -j "$BLOCK_CHAIN" 2>/dev/null; do
-        "$IPT" -D INPUT -j "$BLOCK_CHAIN" 2>/dev/null || break
+    for C in $(block_chains); do
+        while "$IPT" -C INPUT -j "$C" 2>/dev/null; do
+            "$IPT" -D INPUT -j "$C" 2>/dev/null || break
+        done
+        "$IPT" -F "$C" 2>/dev/null
+        "$IPT" -X "$C" 2>/dev/null
     done
-    "$IPT" -F "$BLOCK_CHAIN" 2>/dev/null
-    "$IPT" -X "$BLOCK_CHAIN" 2>/dev/null
 }
 
-block_prepare() {
-    [ "$(id -u)" = "0" ] || return 0
-    IPT=$(iptables_bin); [ -n "$IPT" ] || return 0
+# block_fill <chain> <addresses> - the chain is left holding exactly these.
+block_fill() {
+    CHAIN="$1"; shift
+    IPT=$(iptables_bin); [ -n "$IPT" ] || return 1
 
-    "$IPT" -N "$BLOCK_CHAIN" 2>/dev/null
-    # Reinsert our jump at the top so a broad DSM INPUT policy cannot accept
-    # the packet before the package-owned deny rules see it.
-    while "$IPT" -C INPUT -j "$BLOCK_CHAIN" 2>/dev/null; do
-        "$IPT" -D INPUT -j "$BLOCK_CHAIN" 2>/dev/null || break
+    "$IPT" -N "$CHAIN" 2>/dev/null
+    "$IPT" -F "$CHAIN" 2>/dev/null || return 1
+    for IP in $@; do
+        valid_ipv4 "$IP" || continue
+        "$IPT" -A "$CHAIN" -s "$IP" -p udp --dport 500 -j DROP 2>/dev/null &&
+        "$IPT" -A "$CHAIN" -s "$IP" -p udp --dport 4500 -j DROP 2>/dev/null &&
+        "$IPT" -A "$CHAIN" -s "$IP" -p 50 -j DROP 2>/dev/null ||
+            log "WARN: failed to add VPN block rule for $IP"
     done
-    "$IPT" -I INPUT 1 -j "$BLOCK_CHAIN" 2>/dev/null || return 1
 }
 
-block_add() {
-    IP="$1"
-    IPT=$(iptables_bin)
-    [ -n "$IPT" ] && valid_ipv4 "$IP" || return 1
+# block_swap <chain> - INPUT jumps to this one and to no other of ours.
+#
+# The new jump goes in before the old one comes out, and it goes in at the
+# top so a broader DSM rule cannot accept the packet first.
+block_swap() {
+    IPT=$(iptables_bin); [ -n "$IPT" ] || return 1
 
-    "$IPT" -A "$BLOCK_CHAIN" -s "$IP" -p udp --dport 500 -j DROP 2>/dev/null || return 1
-    "$IPT" -A "$BLOCK_CHAIN" -s "$IP" -p udp --dport 4500 -j DROP 2>/dev/null || return 1
-    "$IPT" -A "$BLOCK_CHAIN" -s "$IP" -p 50 -j DROP 2>/dev/null || return 1
+    "$IPT" -C INPUT -j "$1" 2>/dev/null ||
+        "$IPT" -I INPUT 1 -j "$1" 2>/dev/null || return 1
+
+    for C in $(block_chains); do
+        [ "$C" = "$1" ] && continue
+        while "$IPT" -C INPUT -j "$C" 2>/dev/null; do
+            "$IPT" -D INPUT -j "$C" 2>/dev/null || break
+        done
+        "$IPT" -F "$C" 2>/dev/null
+    done
 }
 
 sync_block_rules() {
     [ "$(id -u)" = "0" ] || return 0
     IPT=$(iptables_bin); [ -n "$IPT" ] || return 0
 
-    # Turning the package option off removes only this package's chain. DSM's
+    # Turning the package option off removes only this package's chains. DSM's
     # own database and unrelated firewall rules are left untouched.
     if [ "$IKEV2_AUTOBLOCK" != "yes" ]; then
         block_remove
         return 0
     fi
 
-    IPS=$(denied_ips 2>/dev/null); RC=$?
     # Do not clear a working deny chain just because DSM's database is
     # temporarily unavailable or locked.
-    [ "$RC" -eq 0 ] || return 0
+    IPS=$(denied_ips 2>/dev/null) || return 0
 
-    block_prepare || return 0
-    "$IPT" -F "$BLOCK_CHAIN" 2>/dev/null || return 0
-    for IP in $IPS; do
-        block_add "$IP" || log "WARN: failed to add VPN block rule for $IP"
-    done
+    WANT=$(printf '%s\n' $IPS | sed '/^$/d' | sort -u)
+    LIVE=$(block_live)
+    if [ -n "$LIVE" ] && [ "$WANT" = "$(block_contents "$LIVE")" ]; then
+        return 0
+    fi
+
+    # Fill the one that is not carrying traffic, then move the jump to it.
+    NEXT="$BLOCK_CHAIN"
+    [ "$LIVE" = "$BLOCK_CHAIN" ] && NEXT="${BLOCK_CHAIN}2"
+    block_fill "$NEXT" $WANT || return 0
+    block_swap "$NEXT" || return 0
+
+    log "VPN block chain updated ($(printf '%s\n' $WANT | sed '/^$/d' | wc -l | tr -d ' ') addresses)"
 }
 
 # ------------------------------------------------------------ log scanning
