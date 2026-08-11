@@ -1,0 +1,8 @@
+
+[IKEv2VPN_ReleaseAvailable]
+Category: IKEv2 VPN Server
+Level: NOTIFICATION_INFO
+Title: A newer IKEv2 VPN Server release is available
+Desktop: IKEv2 VPN Server %LATEST% is available<br><a class="link-font" target="_blank" href="https://github.com/jungjin0003/IKEv2-VPN-Server/releases/latest">Release notes</a>
+Target: desktop
+

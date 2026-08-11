@@ -41,6 +41,12 @@ INTERVAL=20
 # settings.d drop-ins apply here too (only ${ETC} has to be set beforehand)
 . "$(dirname "$0")/lib/settings.sh"
 
+# Update check and the DSM notification it raises. Both modules derive their
+# own paths, so they do not need common.sh - which ikev2ctl loads and this
+# does not.
+. "$(dirname "$0")/lib/notify.sh"
+. "$(dirname "$0")/lib/release.sh"
+
 IKEV2_AUTOBLOCK="no"
 read_pkg_settings() {
     load_settings
@@ -288,6 +294,14 @@ do_run() {
         if [ "$T" -le 0 ]; then
             read_ab_settings
             read_pkg_settings
+            # Puts the notification tag back if DSM rebuilt its text cache -
+            # a stat and one query while it is still there.
+            notify_ensure || true
+            # Whether a newer release exists, and the notice if there is one.
+            # This is what makes the notice arrive without the management page
+            # ever being opened. Both the lookup and the notice have their own
+            # intervals, so this tick only reads a clock most of the time.
+            release_announce || true
             T=300
         fi
         # always runs: writes events.log for the UI's Log page, and (only

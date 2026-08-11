@@ -73,6 +73,14 @@ do_install() {
 
     echo "OK: sudo rule installed for user '${U}' (${SUDOERS})"
 
+    # The DSM notification tag needs root, which the package install scripts
+    # do not have - this is the first point that does.
+    if "${TARGET}/bin/ikev2ctl" notify-register 2>/dev/null; then
+        echo "OK: DSM notification registered"
+    else
+        echo "WARN: could not register the DSM notification - update notices will not appear"
+    fi
+
     # If the VPN was already enabled before (e.g. this is a re-run after a
     # package upgrade, or the user enabled it before running setup), apply
     # right now so the daemon + kernel modules + NAT come up without needing
@@ -88,6 +96,12 @@ do_install() {
 
 do_remove() {
     [ "$(id -u)" = "0" ] || die "must run as root: sudo $0 remove"
+
+    # Before the sudo rule goes, while ikev2ctl can still be reached: the
+    # notification tag sits in DSM's tables, which uninstalling does not touch.
+    "${TARGET}/bin/ikev2ctl" notify-unregister 2>/dev/null &&
+        echo "OK: DSM notification unregistered"
+
     rm -f "$SUDOERS"
     echo "OK: sudo rule removed"
 }

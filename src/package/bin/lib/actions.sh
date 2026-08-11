@@ -92,6 +92,10 @@ do_apply() {
     # removed on stop (do_remove).
     nat_install
 
+    # The notification tag lives in a DSM cache the package does not own, so
+    # it is put back here rather than only at install: this runs on every boot.
+    notify_ensure || true
+
     date '+%Y-%m-%d %H:%M:%S' > "${ETC}/last_applied"
     own_pkg "${ETC}/last_applied"
 

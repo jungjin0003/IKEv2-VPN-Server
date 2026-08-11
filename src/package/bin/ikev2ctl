@@ -23,6 +23,8 @@
 #
 # usage: ikev2ctl apply|remove|reload|status|clients
 #        ikev2ctl disconnect <conn>|log-dump
+#        ikev2ctl notify-release <version>
+#        ikev2ctl notify-register | notify-unregister
 #        ikev2ctl cert-issue <name> <p12pass> <outfile>
 #        ikev2ctl cert-list | cert-del <name>
 
@@ -49,11 +51,14 @@ case "$1" in
     clients)     do_clients ;;
     disconnect)  disconnect_conn "$2" ;;
     log-dump)    do_log_dump ;;
+    notify-release)    do_notify_release "$2" ;;
+    notify-register)   notify_register ;;
+    notify-unregister) notify_unregister ;;
     cert-issue)  cert_issue "$2" "$3" "$4" ;;
     cert-list)   cert_list ;;
     cert-del)    cert_del "$2" ;;
     *)
-        echo "usage: $0 apply|remove|reload|status|dsm-users|clients|disconnect|log-dump|cert-issue|cert-list|cert-del" >&2
+        echo "usage: $0 apply|remove|reload|status|dsm-users|clients|disconnect|log-dump|notify-release|notify-register|notify-unregister|cert-issue|cert-list|cert-del" >&2
         exit 1
         ;;
 esac

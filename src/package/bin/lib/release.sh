@@ -1,15 +1,16 @@
 # release.sh - is there a newer release than the installed one?
 #
-# The lookup sits here rather than inside the api.cgi handler so that it is
-# not tied to the page: it is a shell module under bin/lib like the rest of
-# the package's own code, and the handler sources it. The answer is cached,
-# so however many times the question is put, GitHub is asked at most once an
-# hour.
+# Two callers, one answer: the management page asks so it can show the notice,
+# and the watcher asks so it can raise the DSM notification without anyone
+# having opened the page. Both go through the same cache, so the page does not
+# pay for a lookup the watcher already made and GitHub is asked no more often
+# because two things want to know.
 #
 # Only the tag name is taken from the response. Everything else is discarded.
 #
-# Paths are derived here rather than taken from common.sh, since not every
-# caller loads it.
+# This module is loaded by ikev2ctl (after common.sh), by ikev2watch (which
+# does not load common.sh) and by the api.cgi handler, so it derives its own
+# paths rather than relying on any of them.
 
 RELEASE_PKG="IKEv2VPN"
 RELEASE_PKG_DIR="${PKG_DIR:-/var/packages/${RELEASE_PKG}}"
@@ -239,4 +240,16 @@ release_latest() {
     fi
 
     [ -n "$RELEASE_LATEST" ]
+}
+
+# release_announce - the watcher's entry point: look, and tell DSM if newer.
+#
+# Runs as root on the watcher's settings-refresh tick. The lookup is rate
+# limited by the cache and the notice by its own daily interval, so calling
+# this often costs a clock read.
+release_announce() {
+    _release_cur=$(release_current_version) || return 0
+    release_latest || return 0
+    release_is_newer "$RELEASE_LATEST" "$_release_cur" || return 0
+    do_notify_release "$RELEASE_LATEST"
 }
