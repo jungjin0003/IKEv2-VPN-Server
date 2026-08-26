@@ -78,7 +78,10 @@ const I18N = {
         confirm_delcert: "'{name}' 인증서 기록을 삭제할까요? (폐기되지는 않습니다)",
         enter_namepass: "이름/비밀번호를 입력하세요",
         enable_failed: "서비스 시작 실패", enabled_ok: "서비스가 시작되었습니다",
-        confirm_disable: "VPN 서비스를 중지할까요? 모든 연결이 끊어집니다.", disabled_ok: "서비스가 중지되었습니다"
+        confirm_disable: "VPN 서비스를 중지할까요? 모든 연결이 끊어집니다.", disabled_ok: "서비스가 중지되었습니다",
+        release_popup_title: "IKEv2 VPN Server",
+        release_available: "IKEv2 VPN Server {version} 업데이트가 있습니다",
+        release_view: "릴리스 노트", release_dismiss: "닫기"
     },
     en: {
         restart_title: "Restart service",
@@ -150,7 +153,10 @@ const I18N = {
         confirm_delcert: "Delete the record for certificate '{name}'? (It is not revoked.)",
         enter_namepass: "Enter a name and password",
         enable_failed: "Failed to start service", enabled_ok: "Service started",
-        confirm_disable: "Stop the VPN service? All connections will drop.", disabled_ok: "Service stopped"
+        confirm_disable: "Stop the VPN service? All connections will drop.", disabled_ok: "Service stopped",
+        release_popup_title: "IKEv2 VPN Server",
+        release_available: "IKEv2 VPN Server {version} is available",
+        release_view: "Release notes", release_dismiss: "Dismiss"
     }
 };
 

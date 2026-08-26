@@ -7,6 +7,7 @@ import { toast, showBusy, hideBusy } from "./store.js";
 import { SERVER_DEFS } from "./servers.js";
 import { TopBar, Sidebar } from "./components/Layout.js";
 import { Toast, Busy } from "./components/Overlays.js";
+import { ReleasePopup } from "./components/ReleasePopup.js";
 import { Overview } from "./pages/Overview.js";
 import { Connections } from "./pages/Connections.js";
 import { Log } from "./pages/Log.js";
@@ -18,6 +19,8 @@ const POLL_MS = 15000;
 
 function App() {
     const [state, setState] = useState(null);
+    const [release, setRelease] = useState(null);
+    const [releaseDismissed, setReleaseDismissed] = useState(false);
     const [page, setPage] = useState("overview");
     // Bumped on every nav click, including a click on the page already shown.
     // It keys the page below, so navigating always remounts and therefore
@@ -43,6 +46,16 @@ function App() {
         refresh().then(hideBusy, hideBusy);
         const id = setInterval(refresh, POLL_MS);
         return function () { clearInterval(id); };
+    }, []);
+
+    // This is deliberately separate from status polling: a release check can
+    // involve the package host contacting GitHub and should run only once.
+    useEffect(function () {
+        getJSON("release").then(function (r) {
+            setRelease(r);
+        }).catch(function () {
+            // A failed optional update check must not disturb package control.
+        });
     }, []);
 
     function enable() {
@@ -102,7 +115,9 @@ function App() {
             </div>
         </div>
         <${Toast} />
-        <${Busy} />`;
+        <${Busy} />
+        <${ReleasePopup} release=${releaseDismissed ? null : release}
+                         onClose=${function () { setReleaseDismissed(true); }} />`;
 }
 
 document.documentElement.lang = LANG;
