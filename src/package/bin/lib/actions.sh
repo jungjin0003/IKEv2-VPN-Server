@@ -175,7 +175,7 @@ do_status() {
     echo "cert_eaptls=${IKEV2_CERT_EAPTLS}"
 
     # DSM-account MSCHAPv2: how many active DSM accounts would be registered
-    # (NT hashes read live from synosmbpasswd.conf, disabled/empty excluded)
+    # (NT hashes read live from the SMB password store, disabled/empty excluded)
     echo "dsm_accounts=$(dsm_ntlm_secrets 2>/dev/null | grep -c '^    ntlm-')"
 
     echo "autoblock=${IKEV2_AUTOBLOCK}"
