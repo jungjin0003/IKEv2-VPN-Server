@@ -33,9 +33,9 @@ The services below can run simultaneously, each with its own **independent clien
 - The management UI is shown in Korean or English automatically, based on the browser language.
 
 ### IKEv2 MSCHAPv2 with DSM user accounts
-Logging in with DSM user accounts over MSCHAPv2 (username/password) requires the **NT hash** of each local account's password. DSM does not officially expose local-account passwords as NT hashes — and of course they cannot be known otherwise. However, Synology DSM keeps NT hashes in its own file `/usr/syno/etc/synosmbpasswd.conf` (as `USERNAME=NThash`) for the SMB service. This package therefore reads the NT hash from that DSM file to authenticate DSM user accounts.
+Logging in with DSM user accounts over MSCHAPv2 (username/password) requires the **NT hash** of each local account's password. DSM does not officially expose local-account passwords as NT hashes, and of course they cannot be known otherwise. Samba needs that same NT hash to serve SMB, though, so DSM keeps one per account in the SMB password store `/etc/samba/private/smbpasswd`. This package therefore reads the NT hash from that store to authenticate DSM user accounts.
 
-- Each time the service starts/restarts, the hashes are re-read from `synosmbpasswd.conf` and accounts are (re)registered — so adding, removing, or changing the password of an account takes effect after the service is restarted.
+- Each time the service starts/restarts, the hashes are re-read from the SMB password store and accounts are (re)registered, so adding, removing, or changing the password of an account takes effect after the service is restarted.
 - **Disabled (expired) or passwordless accounts are excluded automatically** (e.g. `admin`, `guest`).
 
 ## Installation
