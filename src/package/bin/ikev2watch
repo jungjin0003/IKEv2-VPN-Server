@@ -326,6 +326,16 @@ scan_ike_log() {
         close(astate)
     }
     {
+        # Every charon numbers its IKE_SAs from 1, so the ids of one that has
+        # just started are the ids the one before it used. Nothing learned
+        # about the earlier IKE_SAs can be carried into them.
+        if ($0 ~ /Starting IKE charon daemon/) {
+            delete addr
+            delete failed
+            delete detail
+            delete est
+        }
+
         if (!match($0, /<[^|>]*\|[0-9]+>/)) next
         id = substr($0, RSTART, RLENGTH); gsub(/[<>]/, "", id)   # "conn|N"
         cn = id; sub(/\|.*/, "", cn)                             # "conn"
