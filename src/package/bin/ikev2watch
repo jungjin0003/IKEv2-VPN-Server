@@ -353,7 +353,7 @@ scan_ike_log() {
         # How the authentication ended. This follows the line above whenever
         # there was one, and a pubkey or EAP-TLS client is reported only in
         # this form, so it counts only for an IKE_SA that has nothing counted
-        # against it yet. "(myself)" is this server's own key or certificate
+        # against it yet. "(myself)" is the local key or certificate
         # failing and says nothing about who connected.
         else if (!(id in failed) && $0 !~ /\(myself\)/ &&
                  $0 ~ /EAP method .* failed for peer|no trusted .* public key found|signature validation failed|constraint check failed|no EAP key found|authentication of .* failed|EAP_FAILURE|N\(AUTH_FAILED\)|received AUTHENTICATION_FAILED/) {
