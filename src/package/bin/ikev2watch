@@ -314,10 +314,12 @@ scan_ike_log() {
         return cn
     }
     BEGIN {
-        # restore the id->ip map learned in previous passes
+        # restore the id->ip map and the ids already counted as a failure,
+        # both learned in previous passes
         while ((getline line < astate) > 0) {
             n = split(line, a, "\t")
             if (n >= 2 && a[1] != "") addr[a[1]] = a[2]
+            if (n >= 3 && a[3] == "1") failed[a[1]] = 1
         }
         close(astate)
     }
@@ -341,18 +343,42 @@ scan_ike_log() {
 
         ip = (id in addr) ? addr[id] : ""
 
-        if ($0 ~ /verification failed|authentication failed|EAP_FAILURE|no shared key found|constraint check failed|AUTHENTICATION_FAILED|received AUTHENTICATION_FAILED/) {
-            if (ip != "") { print ip; printf "%s|%s|-|auth_fail|%s\n", now, connname(cn), ip >> ev }
+        # A credential charon rejected. There is one such line per try the
+        # client made: MSCHAPv2 lets it retry inside a single IKE_SA and
+        # every retry is written out on its own, so each line counts.
+        fail = 0
+        if ($0 ~ /verification failed|no shared key found/) {
+            fail = 1
+        }
+        # How the authentication ended. This follows the line above whenever
+        # there was one, and a pubkey or EAP-TLS client is reported only in
+        # this form, so it counts only for an IKE_SA that has nothing counted
+        # against it yet. "(myself)" is this server's own key or certificate
+        # failing and says nothing about who connected.
+        else if (!(id in failed) && $0 !~ /\(myself\)/ &&
+                 $0 ~ /EAP method .* failed for peer|no trusted .* public key found|signature validation failed|constraint check failed|no EAP key found|authentication of .* failed|EAP_FAILURE|N\(AUTH_FAILED\)|received AUTHENTICATION_FAILED/) {
+            fail = 1
+        }
+
+        if (fail) {
+            if (ip != "") {
+                failed[id] = 1
+                print ip
+                printf "%s|%s|-|auth_fail|%s\n", now, connname(cn), ip >> ev
+            }
         } else if ($0 ~ /IKE_SA .* established/) {
             if (ip != "" && !(id in est)) { est[id] = 1; printf "%s|%s|-|established|%s\n", now, connname(cn), ip >> ev }
         } else if ($0 ~ /IKE_SA .* deleted/) {
             if (ip != "") printf "%s|%s|-|disconnected|%s\n", now, connname(cn), ip >> ev
-            delete addr[id]   # SA gone - stop tracking so the map stays bounded
+            # SA gone - stop tracking so the map stays bounded, and let the
+            # next attempt from this address be counted on its own
+            delete addr[id]
+            delete failed[id]
         }
     }
     END {
         printf "" > astateout          # always (re)create, even if map is empty
-        for (k in addr) print k "\t" addr[k] >> astateout
+        for (k in addr) print k "\t" addr[k] "\t" ((k in failed) ? "1" : "0") >> astateout
         close(astateout)
     }'
     # commit the refreshed id->ip map
