@@ -110,22 +110,23 @@ valid_ipv4() {
         END { exit (ok == 1 ? 0 : 1) }
     '
 }
-whitelist_table() {
+# DSM keeps the addresses an administrator allowed in the same table as the
+# ones it blocked, told apart by the Deny column: what Control Panel >
+# Security > Protection shows as the allow list is the Deny=0 rows. There is
+# no separate table for them, and since the address is the primary key, a
+# block written over one of those rows is what would take it off that list.
+is_allowed() {
+    valid_ipv4 "$1" || return 1
     SQLITE=$(find_sqlite); [ -n "$SQLITE" ] || return 1
-    "$SQLITE" "$AB_DB" "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE '%White%';" 2>/dev/null | head -n 1
-}
-
-is_whitelisted() {
-    WT=$(whitelist_table) || return 1
-    [ -n "$WT" ] || return 1
-    SQLITE=$(find_sqlite)
-    N=$("$SQLITE" "$AB_DB" "SELECT COUNT(*) FROM ${WT} WHERE IP='$1';" 2>/dev/null)
+    [ -f "$AB_DB" ] || return 1
+    N=$("$SQLITE" "$AB_DB" "SELECT COUNT(*) FROM AutoBlockIP WHERE Deny=0 AND IP='$1';" 2>/dev/null)
     [ "$N" -gt 0 ] 2>/dev/null
 }
 
 db_block() {
     IP="$1"
     valid_ipv4 "$IP" || return 1
+    is_allowed "$IP" && return 1
     SQLITE=$(find_sqlite)
     [ -n "$SQLITE" ] && [ -f "$AB_DB" ] || return 1
     NOW=$(date +%s)
@@ -422,7 +423,7 @@ record_failures() {
     for ip in $(printf '%s\n' "$NEW" | sort -u); do
         CNT=$(grep -c " ${ip}\$" "$FAILDB" 2>/dev/null)
         [ "$CNT" -ge "$AB_ATTEMPTS" ] 2>/dev/null || continue
-        if is_whitelisted "$ip"; then
+        if is_allowed "$ip"; then
             log "threshold reached but $ip is in DSM allow list - skipped"
             continue
         fi
