@@ -321,6 +321,7 @@ scan_ike_log() {
             n = split(line, a, "\t")
             if (n >= 2 && a[1] != "") addr[a[1]] = a[2]
             if (n >= 3 && a[3] == "1") failed[a[1]] = 1
+            if (n >= 4 && a[4] == "1") detail[a[1]] = 1
         }
         close(astate)
     }
@@ -344,18 +345,26 @@ scan_ike_log() {
 
         ip = (id in addr) ? addr[id] : ""
 
-        # A credential charon rejected. There is one such line per try the
-        # client made: MSCHAPv2 lets it retry inside a single IKE_SA and
-        # every retry is written out on its own, so each line counts.
+        # A credential the server checked and turned down. MSCHAPv2 lets a
+        # client try again inside one IKE_SA and every try is written out on
+        # its own, so each of these lines is an attempt of its own. The
+        # exception is the first one after an outcome line already counted
+        # for this IKE_SA: charon states the reason it will fail before it
+        # writes the check itself, and that is one attempt, not two.
         fail = 0
         if ($0 ~ /verification failed|no shared key found/) {
-            fail = 1
+            if (!(id in detail) && (id in failed)) {
+                detail[id] = 1
+            } else {
+                fail = 1
+                detail[id] = 1
+            }
         }
-        # How the authentication ended. This follows the line above whenever
-        # there was one, and a pubkey or EAP-TLS client is reported only in
-        # this form, so it counts only for an IKE_SA that has nothing counted
-        # against it yet. "(myself)" is the local key or certificate
-        # failing and says nothing about who connected.
+        # How the authentication ended, or why it was going to. A pubkey or
+        # EAP-TLS client is reported only in this form, so these count for an
+        # IKE_SA that has nothing counted against it yet. "(myself)" is the
+        # local key or certificate failing and says nothing about who
+        # connected.
         else if (!(id in failed) && $0 !~ /\(myself\)/ &&
                  $0 ~ /EAP method .* failed for peer|no trusted .* public key found|signature validation failed|constraint check failed|no EAP key found|authentication of .* failed|EAP_FAILURE|N\(AUTH_FAILED\)|received AUTHENTICATION_FAILED/) {
             fail = 1
@@ -375,11 +384,12 @@ scan_ike_log() {
             # next attempt from this address be counted on its own
             delete addr[id]
             delete failed[id]
+            delete detail[id]
         }
     }
     END {
         printf "" > astateout          # always (re)create, even if map is empty
-        for (k in addr) print k "\t" addr[k] "\t" ((k in failed) ? "1" : "0") >> astateout
+        for (k in addr) print k "\t" addr[k] "\t" ((k in failed) ? "1" : "0") "\t" ((k in detail) ? "1" : "0") >> astateout
         close(astateout)
     }'
     # commit the refreshed id->ip map
