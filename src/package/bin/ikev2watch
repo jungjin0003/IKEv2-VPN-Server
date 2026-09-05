@@ -12,7 +12,7 @@
 # (/etc/synoautoblock.db). The package also mirrors active denied entries
 # into its own INPUT chain so IKEv2 traffic is rejected before charon.
 #
-# usage: ikev2watch start|stop|run|status
+# usage: ikev2watch start|stop|run|status|events|events-clear|block-clear
 
 PKG="IKEv2VPN"
 PKG_DIR="/var/packages/${PKG}"
@@ -176,6 +176,12 @@ denied_ips() {
 # stop packets before they reach this package's charon listener. Keep a small,
 # package-owned INPUT chain in sync with the same database so denied addresses
 # are rejected on UDP 500/4500 and native ESP (protocol 50) as well.
+#
+# The chain does not follow the service. What it denies is this package's own
+# ports and nothing else, so it stays up across a stop, a restart and an
+# upgrade, where taking it down would let an address DSM still denies reach
+# charon the moment the service came back. Two things take it down: turning
+# the package option off, and uninstalling the package.
 
 iptables_bin() {
     command -v iptables 2>/dev/null
