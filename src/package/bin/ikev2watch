@@ -511,8 +511,14 @@ do_stop() {
         kill "$P" 2>/dev/null
         rm -f "$PIDFILE"
     fi
-    block_remove
     log "watcher stopped"
+}
+
+# Takes the deny chain down. Reserved for uninstalling the package, which is
+# the one point at which nothing of the package is meant to be left behind.
+do_block_clear() {
+    block_remove
+    log "VPN block chain removed"
 }
 
 do_status() {
@@ -541,8 +547,9 @@ case "$1" in
     status)       do_status ;;
     events)       do_events "$2" ;;
     events-clear) do_events_clear ;;
+    block-clear)  do_block_clear ;;
     *)
-        echo "usage: $0 start|stop|run|status|events|events-clear" >&2
+        echo "usage: $0 start|stop|run|status|events|events-clear|block-clear" >&2
         exit 1
         ;;
 esac
