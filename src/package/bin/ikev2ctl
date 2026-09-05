@@ -13,7 +13,7 @@
 #
 # Supported auth methods (run simultaneously, each its own swanctl conn):
 #   - ikev2        : EAP-MSCHAPv2 (package accounts, or DSM accounts via
-#                    their NT hashes read from synosmbpasswd.conf)
+#                    their NT hashes read from the SMB password store)
 #   - ikev2-psk    : pre-shared key
 #   - ikev2-rsa    : client certificate (pubkey), issued by package CA
 #   - ikev2-eaptls : EAP-TLS client certificate
