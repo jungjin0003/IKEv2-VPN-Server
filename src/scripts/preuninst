@@ -1,9 +1,12 @@
 #!/bin/sh
-# IKEv2VPN preuninst - stop the bundled charon daemon
+# IKEv2VPN preuninst - stop the bundled charon daemon and take the auto-block
+# deny chain down, this being the one point at which the package is meant to
+# leave nothing behind (a stop or a restart keeps the chain).
 PKG_DIR="/var/packages/${SYNOPKG_PKGNAME:-IKEv2VPN}"
 TARGET="${SYNOPKG_PKGDEST:-${PKG_DIR}/target}"
 
 if [ -x "${TARGET}/bin/asroot" ]; then
     "${TARGET}/bin/asroot" ikev2ctl remove || true
+    "${TARGET}/bin/asroot" ikev2watch block-clear || true
 fi
 exit 0

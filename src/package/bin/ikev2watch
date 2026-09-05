@@ -9,10 +9,10 @@
 # setting. When IKEV2_AUTOBLOCK=yes, also counts failures per source IP
 # using DSM's own auto-block threshold settings (Control Panel > Security >
 # Protection) and registers offenders in the DSM auto-block DB
-# (/etc/synoautoblock.db). Registration only - enforcement is left
-# entirely to DSM.
+# (/etc/synoautoblock.db). The package also mirrors active denied entries
+# into its own INPUT chain so IKEv2 traffic is rejected before charon.
 #
-# usage: ikev2watch start|stop|run|status
+# usage: ikev2watch start|stop|run|status|events|events-clear|block-clear
 
 PKG="IKEv2VPN"
 PKG_DIR="/var/packages/${PKG}"
@@ -35,6 +35,7 @@ EVENTS_LOG="${VAR}/events.log"
 EVENTS_MAX_LINES=2000
 
 AB_DB="/etc/synoautoblock.db"
+BLOCK_CHAIN="IKEV2VPN_BLOCK"
 INTERVAL=20
 
 # package settings, read through the same loader ikev2ctl uses so the
@@ -97,21 +98,35 @@ ipstd() {
         '{printf "0000:0000:0000:0000:0000:FFFF:%02X%02X:%02X%02X", $1, $2, $3, $4}'
 }
 
-whitelist_table() {
-    SQLITE=$(find_sqlite); [ -n "$SQLITE" ] || return 1
-    "$SQLITE" "$AB_DB" "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE '%White%';" 2>/dev/null | head -n 1
+valid_ipv4() {
+    printf '%s' "$1" | awk -F. '
+        BEGIN { ok = 1 }
+        NF != 4 { ok = 0 }
+        {
+            for (i = 1; i <= 4; i++) {
+                if ($i !~ /^[0-9]+$/ || $i > 255) ok = 0
+            }
+        }
+        END { exit (ok == 1 ? 0 : 1) }
+    '
 }
-
-is_whitelisted() {
-    WT=$(whitelist_table) || return 1
-    [ -n "$WT" ] || return 1
-    SQLITE=$(find_sqlite)
-    N=$("$SQLITE" "$AB_DB" "SELECT COUNT(*) FROM ${WT} WHERE IP='$1';" 2>/dev/null)
+# DSM keeps the addresses an administrator allowed in the same table as the
+# ones it blocked, told apart by the Deny column: what Control Panel >
+# Security > Protection shows as the allow list is the Deny=0 rows. There is
+# no separate table for them, and since the address is the primary key, a
+# block written over one of those rows is what would take it off that list.
+is_allowed() {
+    valid_ipv4 "$1" || return 1
+    SQLITE=$(find_sqlite); [ -n "$SQLITE" ] || return 1
+    [ -f "$AB_DB" ] || return 1
+    N=$("$SQLITE" "$AB_DB" "SELECT COUNT(*) FROM AutoBlockIP WHERE Deny=0 AND IP='$1';" 2>/dev/null)
     [ "$N" -gt 0 ] 2>/dev/null
 }
 
 db_block() {
     IP="$1"
+    valid_ipv4 "$IP" || return 1
+    is_allowed "$IP" && return 1
     SQLITE=$(find_sqlite)
     [ -n "$SQLITE" ] && [ -f "$AB_DB" ] || return 1
     NOW=$(date +%s)
@@ -137,13 +152,142 @@ db_block() {
     "$SQLITE" "$AB_DB" "INSERT OR REPLACE INTO AutoBlockIP ($C) VALUES ($V);" 2>/dev/null
 }
 
+# Succeeds when the database could be read, whatever it held. The rows are
+# taken first and filtered after, so the exit status is the query's and not
+# the last address's - the caller acts on the difference, and an address it
+# cannot use (an IPv6 entry, say) is not the same as a database it could not
+# reach.
 denied_ips() {
     SQLITE=$(find_sqlite)
-    [ -n "$SQLITE" ] && [ -f "$AB_DB" ] || return 0
+    [ -n "$SQLITE" ] && [ -f "$AB_DB" ] || return 1
     NOW=$(date +%s)
-    "$SQLITE" "$AB_DB" \
-        "SELECT IP FROM AutoBlockIP WHERE Deny=1 AND (ExpireTime=0 OR ExpireTime>$NOW);" 2>/dev/null \
-        | grep -E '^([0-9]{1,3}\.){3}[0-9]{1,3}$'
+    ROWS=$("$SQLITE" "$AB_DB" \
+        "SELECT IP FROM AutoBlockIP WHERE Deny=1 AND (ExpireTime=0 OR ExpireTime>$NOW);" \
+        2>/dev/null) || return 1
+    printf '%s\n' "$ROWS" | while IFS= read -r IP; do
+        valid_ipv4 "$IP" && printf '%s\n' "$IP"
+    done
+    return 0
+}
+
+# --------------------------------------------------------- VPN-side blocking
+#
+# DSM's auto-block database protects DSM services, but it does not necessarily
+# stop packets before they reach this package's charon listener. Keep a small,
+# package-owned INPUT chain in sync with the same database so denied addresses
+# are rejected on UDP 500/4500 and native ESP (protocol 50) as well.
+#
+# The chain does not follow the service. What it denies is this package's own
+# ports and nothing else, so it stays up across a stop, a restart and an
+# upgrade, where taking it down would let an address DSM still denies reach
+# charon the moment the service came back. Two things take it down: turning
+# the package option off, and uninstalling the package.
+
+iptables_bin() {
+    command -v iptables 2>/dev/null
+}
+
+# Two chains, one of them live at a time. A change is built in whichever is
+# idle and the jump is then moved onto it, so the addresses already denied
+# stay denied throughout - flushing the live chain and refilling it would
+# leave a gap on every pass.
+block_chains() {
+    printf '%s\n%s\n' "$BLOCK_CHAIN" "${BLOCK_CHAIN}2"
+}
+
+# The chain INPUT currently jumps to, if any.
+block_live() {
+    IPT=$(iptables_bin); [ -n "$IPT" ] || return 1
+    for C in $(block_chains); do
+        "$IPT" -C INPUT -j "$C" 2>/dev/null && { printf '%s\n' "$C"; return 0; }
+    done
+    return 1
+}
+
+# The addresses a chain denies, one per line, sorted - comparable with the
+# set that is wanted.
+block_contents() {
+    IPT=$(iptables_bin); [ -n "$IPT" ] || return 1
+    "$IPT" -S "$1" 2>/dev/null |
+        sed -n 's/^-A [^ ]* -s \([0-9.]*\)\(\/32\)\{0,1\} .*/\1/p' | sort -u
+}
+
+block_remove() {
+    [ "$(id -u)" = "0" ] || return 0
+    IPT=$(iptables_bin); [ -n "$IPT" ] || return 0
+
+    for C in $(block_chains); do
+        while "$IPT" -C INPUT -j "$C" 2>/dev/null; do
+            "$IPT" -D INPUT -j "$C" 2>/dev/null || break
+        done
+        "$IPT" -F "$C" 2>/dev/null
+        "$IPT" -X "$C" 2>/dev/null
+    done
+}
+
+# block_fill <chain> <addresses> - the chain is left holding exactly these.
+block_fill() {
+    CHAIN="$1"; shift
+    IPT=$(iptables_bin); [ -n "$IPT" ] || return 1
+
+    "$IPT" -N "$CHAIN" 2>/dev/null
+    "$IPT" -F "$CHAIN" 2>/dev/null || return 1
+    for IP in $@; do
+        valid_ipv4 "$IP" || continue
+        "$IPT" -A "$CHAIN" -s "$IP" -p udp --dport 500 -j DROP 2>/dev/null &&
+        "$IPT" -A "$CHAIN" -s "$IP" -p udp --dport 4500 -j DROP 2>/dev/null &&
+        "$IPT" -A "$CHAIN" -s "$IP" -p 50 -j DROP 2>/dev/null ||
+            log "WARN: failed to add VPN block rule for $IP"
+    done
+}
+
+# block_swap <chain> - INPUT jumps to this one and to no other of ours.
+#
+# The new jump goes in before the old one comes out, and it goes in at the
+# top so a broader DSM rule cannot accept the packet first.
+block_swap() {
+    IPT=$(iptables_bin); [ -n "$IPT" ] || return 1
+
+    "$IPT" -C INPUT -j "$1" 2>/dev/null ||
+        "$IPT" -I INPUT 1 -j "$1" 2>/dev/null || return 1
+
+    for C in $(block_chains); do
+        [ "$C" = "$1" ] && continue
+        while "$IPT" -C INPUT -j "$C" 2>/dev/null; do
+            "$IPT" -D INPUT -j "$C" 2>/dev/null || break
+        done
+        "$IPT" -F "$C" 2>/dev/null
+    done
+}
+
+sync_block_rules() {
+    [ "$(id -u)" = "0" ] || return 0
+    IPT=$(iptables_bin); [ -n "$IPT" ] || return 0
+
+    # Turning the package option off removes only this package's chains. DSM's
+    # own database and unrelated firewall rules are left untouched.
+    if [ "$IKEV2_AUTOBLOCK" != "yes" ]; then
+        block_remove
+        return 0
+    fi
+
+    # Do not clear a working deny chain just because DSM's database is
+    # temporarily unavailable or locked.
+    IPS=$(denied_ips 2>/dev/null) || return 0
+
+    WANT=$(printf '%s\n' $IPS | sed '/^$/d' | sort -u)
+    LIVE=$(block_live)
+    if [ -n "$LIVE" ] && [ "$WANT" = "$(block_contents "$LIVE")" ]; then
+        return 0
+    fi
+
+    # Fill the one that is not carrying traffic, then move the jump to it.
+    NEXT="$BLOCK_CHAIN"
+    [ "$LIVE" = "$BLOCK_CHAIN" ] && NEXT="${BLOCK_CHAIN}2"
+    block_fill "$NEXT" $WANT || return 0
+    block_swap "$NEXT" || return 0
+
+    log "VPN block chain updated ($(printf '%s\n' $WANT | sed '/^$/d' | wc -l | tr -d ' ') addresses)"
 }
 
 # ------------------------------------------------------------ log scanning
@@ -177,14 +321,27 @@ scan_ike_log() {
         return cn
     }
     BEGIN {
-        # restore the id->ip map learned in previous passes
+        # restore the id->ip map and the ids already counted as a failure,
+        # both learned in previous passes
         while ((getline line < astate) > 0) {
             n = split(line, a, "\t")
             if (n >= 2 && a[1] != "") addr[a[1]] = a[2]
+            if (n >= 3 && a[3] == "1") failed[a[1]] = 1
+            if (n >= 4 && a[4] == "1") detail[a[1]] = 1
         }
         close(astate)
     }
     {
+        # Every charon numbers its IKE_SAs from 1, so the ids of one that has
+        # just started are the ids the one before it used. Nothing learned
+        # about the earlier IKE_SAs can be carried into them.
+        if ($0 ~ /Starting IKE charon daemon/) {
+            delete addr
+            delete failed
+            delete detail
+            delete est
+        }
+
         if (!match($0, /<[^|>]*\|[0-9]+>/)) next
         id = substr($0, RSTART, RLENGTH); gsub(/[<>]/, "", id)   # "conn|N"
         cn = id; sub(/\|.*/, "", cn)                             # "conn"
@@ -204,18 +361,51 @@ scan_ike_log() {
 
         ip = (id in addr) ? addr[id] : ""
 
-        if ($0 ~ /verification failed|authentication failed|EAP_FAILURE|no shared key found|constraint check failed|AUTHENTICATION_FAILED|received AUTHENTICATION_FAILED/) {
-            if (ip != "") { print ip; printf "%s|%s|-|auth_fail|%s\n", now, connname(cn), ip >> ev }
+        # A credential the server checked and turned down. MSCHAPv2 lets a
+        # client try again inside one IKE_SA and every try is written out on
+        # its own, so each of these lines is an attempt of its own. The
+        # exception is the first one after an outcome line already counted
+        # for this IKE_SA: charon states the reason it will fail before it
+        # writes the check itself, and that is one attempt, not two.
+        fail = 0
+        if ($0 ~ /verification failed|no shared key found/) {
+            if (!(id in detail) && (id in failed)) {
+                detail[id] = 1
+            } else {
+                fail = 1
+                detail[id] = 1
+            }
+        }
+        # How the authentication ended, or why it was going to. A pubkey or
+        # EAP-TLS client is reported only in this form, so these count for an
+        # IKE_SA that has nothing counted against it yet. "(myself)" is the
+        # local key or certificate failing and says nothing about who
+        # connected.
+        else if (!(id in failed) && $0 !~ /\(myself\)/ &&
+                 $0 ~ /EAP method .* failed for peer|no trusted .* public key found|signature validation failed|constraint check failed|no EAP key found|authentication of .* failed|EAP_FAILURE|N\(AUTH_FAILED\)|received AUTHENTICATION_FAILED/) {
+            fail = 1
+        }
+
+        if (fail) {
+            if (ip != "") {
+                failed[id] = 1
+                print ip
+                printf "%s|%s|-|auth_fail|%s\n", now, connname(cn), ip >> ev
+            }
         } else if ($0 ~ /IKE_SA .* established/) {
             if (ip != "" && !(id in est)) { est[id] = 1; printf "%s|%s|-|established|%s\n", now, connname(cn), ip >> ev }
         } else if ($0 ~ /IKE_SA .* deleted/) {
             if (ip != "") printf "%s|%s|-|disconnected|%s\n", now, connname(cn), ip >> ev
-            delete addr[id]   # SA gone - stop tracking so the map stays bounded
+            # SA gone - stop tracking so the map stays bounded, and let the
+            # next attempt from this address be counted on its own
+            delete addr[id]
+            delete failed[id]
+            delete detail[id]
         }
     }
     END {
         printf "" > astateout          # always (re)create, even if map is empty
-        for (k in addr) print k "\t" addr[k] >> astateout
+        for (k in addr) print k "\t" addr[k] "\t" ((k in failed) ? "1" : "0") "\t" ((k in detail) ? "1" : "0") >> astateout
         close(astateout)
     }'
     # commit the refreshed id->ip map
@@ -259,7 +449,7 @@ record_failures() {
     for ip in $(printf '%s\n' "$NEW" | sort -u); do
         CNT=$(grep -c " ${ip}\$" "$FAILDB" 2>/dev/null)
         [ "$CNT" -ge "$AB_ATTEMPTS" ] 2>/dev/null || continue
-        if is_whitelisted "$ip"; then
+        if is_allowed "$ip"; then
             log "threshold reached but $ip is in DSM allow list - skipped"
             continue
         fi
@@ -308,6 +498,7 @@ do_run() {
         # when IKEV2_AUTOBLOCK=yes and DSM auto-block is enabled) registers
         # offenders in DSM's auto-block DB
         record_failures
+        sync_block_rules
         sleep "$INTERVAL"
         T=$((T - INTERVAL))
     done
@@ -327,6 +518,13 @@ do_stop() {
         rm -f "$PIDFILE"
     fi
     log "watcher stopped"
+}
+
+# Takes the deny chain down. Reserved for uninstalling the package, which is
+# the one point at which nothing of the package is meant to be left behind.
+do_block_clear() {
+    block_remove
+    log "VPN block chain removed"
 }
 
 do_status() {
@@ -355,8 +553,9 @@ case "$1" in
     status)       do_status ;;
     events)       do_events "$2" ;;
     events-clear) do_events_clear ;;
+    block-clear)  do_block_clear ;;
     *)
-        echo "usage: $0 start|stop|run|status|events|events-clear" >&2
+        echo "usage: $0 start|stop|run|status|events|events-clear|block-clear" >&2
         exit 1
         ;;
 esac
