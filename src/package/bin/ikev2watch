@@ -53,6 +53,15 @@ read_pkg_settings() {
     load_settings
 }
 
+# The package settings exactly as they sit on disk. do_run holds what it last
+# read and compares the two, so a setting saved in the management UI reaches
+# the block rules on the next tick instead of at the next five minute refresh.
+# The files are a few hundred bytes, which makes reading them on every tick
+# cheaper than the process it takes to ask for their timestamps.
+settings_text() {
+    cat "$SETTINGS" "${SETTINGS_D}"/*.conf 2>/dev/null
+}
+
 log() {
     mkdir -p "$VAR"
     echo "$(date '+%Y-%m-%d %H:%M:%S') [watch] $*" >> "$LOG"
@@ -479,11 +488,13 @@ do_run() {
     echo $$ > "$PIDFILE"
     log "watcher started (pid $$)"
     T=0
+    SETTINGS_SEEN=""
     while :; do
         # refresh DSM + package settings every ~5 min
         if [ "$T" -le 0 ]; then
             read_ab_settings
             read_pkg_settings
+            SETTINGS_SEEN=$(settings_text)
             # Puts the notification tag back if DSM rebuilt its text cache -
             # a stat and one query while it is still there.
             notify_ensure || true
@@ -493,6 +504,17 @@ do_run() {
             # intervals, so this tick only reads a clock most of the time.
             release_announce || true
             T=300
+        else
+            # A setting saved between two refreshes takes effect here. Saving
+            # in the management UI reapplies the VPN configuration but leaves
+            # this process running, so the settings on disk are what says a
+            # change happened.
+            SETTINGS_NOW=$(settings_text)
+            if [ "$SETTINGS_NOW" != "$SETTINGS_SEEN" ]; then
+                read_pkg_settings
+                SETTINGS_SEEN="$SETTINGS_NOW"
+                log "package settings reloaded (autoblock=${IKEV2_AUTOBLOCK})"
+            fi
         fi
         # always runs: writes events.log for the UI's Log page, and (only
         # when IKEV2_AUTOBLOCK=yes and DSM auto-block is enabled) registers
