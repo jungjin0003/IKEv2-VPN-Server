@@ -19,6 +19,48 @@ get_leftid() {
 
 # ----------------------------------------------------------------- server cert
 
+# Return the number of PEM certificate blocks in a file.
+pem_cert_count() {
+    _input="$1"
+    _count=$(grep -c -- '-----BEGIN CERTIFICATE-----' "$_input" 2>/dev/null || true)
+    printf '%s\n' "${_count:-0}"
+}
+
+# Copy one certificate from a PEM bundle. OpenSSL's default file loader stops
+# after the first certificate, so bundle members must be handled explicitly.
+extract_pem_cert() {
+    _input="$1"; _number="$2"; _output="$3"
+    awk -v wanted="$_number" '
+        /-----BEGIN CERTIFICATE-----/ { n++; capture=(n == wanted) }
+        capture { print }
+        capture && /-----END CERTIFICATE-----/ { exit }
+    ' "$_input" > "$_output"
+    [ -s "$_output" ] || { rm -f "$_output"; return 1; }
+}
+
+# Split a certificate bundle into separately loadable files. strongSwan and
+# the DSM profile generator each consume one certificate per file.
+split_pem_certs() {
+    _input="$1"; _prefix="$2"; _start="${3:-1}"
+    _total=$(pem_cert_count "$_input")
+    [ "$_total" -gt 0 ] || return 1
+
+    _out_index=1
+    _number="$_start"
+    while [ "$_number" -le "$_total" ]; do
+        _output="${_prefix}-$(printf '%03d' "$_out_index").pem"
+        extract_pem_cert "$_input" "$_number" "$_output" || return 1
+        openssl x509 -in "$_output" -noout >/dev/null 2>&1 || {
+            rm -f "$_output"
+            return 1
+        }
+        _out_index=$((_out_index + 1))
+        _number=$((_number + 1))
+    done
+
+    PEM_CERT_COUNT=$((_out_index - 1))
+}
+
 # best-effort description for a DSM archive cert id, from the archive INFO json
 dsm_cert_desc() {
     [ -f "${SYNO_CERT_ARCHIVE}/INFO" ] || return 0
@@ -98,18 +140,23 @@ ensure_temp_cert() {
 # install the certificate for one cert-based scope into swanctl.
 #   $1 = scope (mschapv2|rsa|eaptls), $2 = selected DSM cert id
 # Produces x509/server-cert-<scope>.pem, private/server-key-<scope>.pem,
-# x509ca/server-chain-<scope>.pem (CA chain / self-signed), and records
-# CERT_DIR/<scope>.leftid, <scope>.selfsigned, <scope>.temporary.
+# separately numbered x509ca/server-chain-<scope>-*.pem files, and records
+# CERT_DIR/<scope>.leftid, <scope>.ca.pem, <scope>.selfsigned,
+# <scope>.temporary.
 install_server_cert() {
     _scope="$1"; _cid="$2"
     _crt="${SWANCTL_ETC}/x509/server-cert-${_scope}.pem"
     _key="${SWANCTL_ETC}/private/server-key-${_scope}.pem"
-    _chain="${SWANCTL_ETC}/x509ca/server-chain-${_scope}.pem"
+    _chain_prefix="${SWANCTL_ETC}/x509ca/server-chain-${_scope}"
+    _profile_ca="${CERT_DIR}/${_scope}.ca.pem"
     mkdir -p "${SWANCTL_ETC}/x509" "${SWANCTL_ETC}/private" "${SWANCTL_ETC}/x509ca" "$CERT_DIR"
 
     _src=$(dsm_cert_src "$_cid") || _src=""
     if [ -n "$_src" ]; then
-        cp -f "${_src}/cert.pem"    "$_crt"
+        # Keep the leaf separate from all issuing authorities. DSM commonly
+        # stores a leaf-only cert.pem, but some stores put the full chain in it.
+        extract_pem_cert "${_src}/cert.pem" 1 "$_crt" \
+            || fail "invalid DSM certificate bundle: ${_src}/cert.pem"
         cp -f "${_src}/privkey.pem" "$_key"
         rm -f "${CERT_DIR}/${_scope}.temporary"
     else
@@ -120,21 +167,46 @@ install_server_cert() {
     fi
     chmod 600 "$_key"
 
-    # CA chain the server presents: intermediate/root from the source dir, or
-    # the cert itself when self-signed (so clients can be told to trust it)
-    rm -f "$_chain" "${CERT_DIR}/${_scope}.selfsigned"
+    # Each authority gets its own file because strongSwan loads one PEM
+    # certificate per credential path. Prefer DSM's chain.pem; otherwise use
+    # fullchain.pem (skipping its leaf), or the additional members in cert.pem.
+    rm -f "${SWANCTL_ETC}/x509ca/server-chain-${_scope}.pem" \
+          "${_chain_prefix}-"*.pem "$_profile_ca" "${CERT_DIR}/${_scope}.selfsigned"
+    _chain_input=""
+    _chain_start=1
     if [ -n "$_src" ] && [ -s "${_src}/chain.pem" ]; then
-        cp -f "${_src}/chain.pem" "$_chain"
+        _chain_input="${_src}/chain.pem"
     elif [ -n "$_src" ] && [ -s "${_src}/fullchain.pem" ]; then
-        awk 'BEGIN{n=0} /BEGIN CERTIFICATE/{n++} n>=2{print}' "${_src}/fullchain.pem" > "$_chain"
-        [ -s "$_chain" ] || rm -f "$_chain"
+        _chain_input="${_src}/fullchain.pem"
+        _chain_start=2
+    elif [ -n "$_src" ] && [ "$(pem_cert_count "${_src}/cert.pem")" -gt 1 ]; then
+        _chain_input="${_src}/cert.pem"
+        _chain_start=2
     fi
+    if [ -n "$_chain_input" ]; then
+        split_pem_certs "$_chain_input" "$_chain_prefix" "$_chain_start" \
+            || fail "invalid DSM CA chain bundle: $_chain_input"
+    fi
+
     _sh=$(openssl x509 -in "$_crt" -noout -subject_hash 2>/dev/null)
     _ih=$(openssl x509 -in "$_crt" -noout -issuer_hash 2>/dev/null)
     if [ -n "$_sh" ] && [ "$_sh" = "$_ih" ]; then
-        cp -f "$_crt" "$_chain"
+        # A self-signed leaf is also the trust anchor. Keep it in the same
+        # separately loadable credential layout as a normal chain.
+        rm -f "${_chain_prefix}-"*.pem
+        extract_pem_cert "$_crt" 1 "${_chain_prefix}-001.pem" \
+            || fail "could not preserve self-signed certificate"
         echo "yes" > "${CERT_DIR}/${_scope}.selfsigned"
     fi
+
+    # Client profiles should trust the final authority in a chain, not the
+    # first intermediate. The numbered files are ordered as supplied by DSM.
+    _last_chain=""
+    for _f in "${_chain_prefix}-"*.pem; do
+        [ -f "$_f" ] || continue
+        _last_chain="$_f"
+    done
+    [ -n "$_last_chain" ] && cp -f "$_last_chain" "$_profile_ca"
 
     # IKE identity presented to clients: configured hostname, else the cert CN
     _lid="$IKEV2_HOSTNAME"
@@ -160,8 +232,9 @@ install_cert() {
     cp -f "${SWANCTL_ETC}/x509/server-cert-mschapv2.pem"  "${CERT_DIR}/server-cert.pem"
     cp -f "${SWANCTL_ETC}/private/server-key-mschapv2.pem" "${CERT_DIR}/server-key.pem"
     chmod 600 "${CERT_DIR}/server-key.pem"
-    if [ -f "${SWANCTL_ETC}/x509ca/server-chain-mschapv2.pem" ]; then
-        cp -f "${SWANCTL_ETC}/x509ca/server-chain-mschapv2.pem" "${CERT_DIR}/ca.pem"
+    rm -f "${CERT_DIR}/ca.pem"
+    if [ -f "${CERT_DIR}/mschapv2.ca.pem" ]; then
+        cp -f "${CERT_DIR}/mschapv2.ca.pem" "${CERT_DIR}/ca.pem"
     else
         rm -f "${CERT_DIR}/ca.pem"
     fi
