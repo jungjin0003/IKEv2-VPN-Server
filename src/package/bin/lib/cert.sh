@@ -155,8 +155,13 @@ install_server_cert() {
     if [ -n "$_src" ]; then
         # Keep the leaf separate from all issuing authorities. DSM commonly
         # stores a leaf-only cert.pem, but some stores put the full chain in it.
-        extract_pem_cert "${_src}/cert.pem" 1 "$_crt" \
-            || fail "invalid DSM certificate bundle: ${_src}/cert.pem"
+        # A file no certificate can be read out of is taken as it stands rather
+        # than treated as fatal, so a certificate store this cannot parse costs
+        # the chain and not the whole service.
+        extract_pem_cert "${_src}/cert.pem" 1 "$_crt" || {
+            log "WARN: no certificate found in ${_src}/cert.pem; installing it unchanged"
+            cp -f "${_src}/cert.pem" "$_crt"
+        }
         cp -f "${_src}/privkey.pem" "$_key"
         rm -f "${CERT_DIR}/${_scope}.temporary"
     else
@@ -185,7 +190,7 @@ install_server_cert() {
     fi
     if [ -n "$_chain_input" ]; then
         split_pem_certs "$_chain_input" "$_chain_prefix" "$_chain_start" \
-            || fail "invalid DSM CA chain bundle: $_chain_input"
+            || log "WARN: no usable CA certificate in $_chain_input; the chain is not installed"
     fi
 
     _sh=$(openssl x509 -in "$_crt" -noout -subject_hash 2>/dev/null)
@@ -195,7 +200,7 @@ install_server_cert() {
         # separately loadable credential layout as a normal chain.
         rm -f "${_chain_prefix}-"*.pem
         extract_pem_cert "$_crt" 1 "${_chain_prefix}-001.pem" \
-            || fail "could not preserve self-signed certificate"
+            || log "WARN: could not install the self-signed certificate as its own trust anchor"
         echo "yes" > "${CERT_DIR}/${_scope}.selfsigned"
     fi
 
