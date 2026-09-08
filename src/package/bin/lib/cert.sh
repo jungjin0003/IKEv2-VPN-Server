@@ -204,14 +204,19 @@ install_server_cert() {
         echo "yes" > "${CERT_DIR}/${_scope}.selfsigned"
     fi
 
-    # Client profiles should trust the final authority in a chain, not the
-    # first intermediate. The numbered files are ordered as supplied by DSM.
-    _last_chain=""
+    # Client profiles should trust the anchor of the chain, not the authority
+    # that signed the server certificate. The anchor is the certificate that
+    # issued itself, which is what the client already has to hold for the path
+    # to complete. A chain that ends before its anchor gives up its last entry.
+    _anchor=""
     for _f in "${_chain_prefix}-"*.pem; do
         [ -f "$_f" ] || continue
-        _last_chain="$_f"
+        _anchor="$_f"
+        _fs=$(openssl x509 -in "$_f" -noout -subject_hash 2>/dev/null)
+        _fi=$(openssl x509 -in "$_f" -noout -issuer_hash 2>/dev/null)
+        [ -n "$_fs" ] && [ "$_fs" = "$_fi" ] && break
     done
-    [ -n "$_last_chain" ] && cp -f "$_last_chain" "$_profile_ca"
+    [ -n "$_anchor" ] && cp -f "$_anchor" "$_profile_ca"
 
     # IKE identity presented to clients: configured hostname, else the cert CN
     _lid="$IKEV2_HOSTNAME"
