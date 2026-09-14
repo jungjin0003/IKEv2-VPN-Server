@@ -2,28 +2,40 @@
 #
 # Unified build script for the IKEv2VPN Synology package (.spk).
 #
-# It performs two stages, in order:
+# It performs three stages, in order:
 #   1. (optional) Build the bundled static strongSwan from source and place
 #      the minimal runtime files (charon, swanctl, strongswan.d/charon/*.conf)
 #      into src/package/strongswan/.
-#   2. Assemble the DSM .spk from src/ into dist/.
+#   2. (optional) Build the bundled ipset userspace tool from source and place
+#      the single binary into src/package/ipset/.
+#   3. Assemble the DSM .spk from src/ into dist/.
 #
-# Stage 1 is SKIPPED automatically when a prebuilt strongSwan is already
-# present under src/package/strongswan/. Pass --rebuild-strongswan to force a
-# fresh build from source.
+# Stages 1 and 2 are SKIPPED automatically when what they produce is already
+# present under src/package/. Pass --rebuild-strongswan or --rebuild-ipset to
+# force a fresh build from source.
 #
 # strongSwan is built --disable-shared --enable-static --enable-monolithic
 # (no plugin .so files - everything baked into charon/swanctl) and links
 # libgmp dynamically against the build machine's system libgmp.
 #
+# ipset needs libmnl, which DSM does not carry either. libmnl is built static
+# into a private prefix and linked in, and ipset's own libipset is static as
+# well, so the result is one executable with nothing to install beside it.
+# The kernel side (ip_set, ip_set_hash_ip, xt_set) is already on DSM, so the
+# kernel modules are not built. DSM 7.2.2 carries glibc 2.36 and the DSM
+# kernel reports "ip_set: protocol 6", which is what the 6.x series speaks.
+#
 # Usage:
-#   ./build.sh                       # build strongSwan if needed, then the .spk
+#   ./build.sh                       # build what is missing, then the .spk
 #   ./build.sh --spk-only            # only assemble the .spk; never compile
-#                                    #   (requires a prebuilt strongSwan; this
-#                                    #    is the mode build.ps1 uses on Windows)
+#                                    #   (requires prebuilt strongSwan and
+#                                    #    ipset; the mode build.ps1 uses on
+#                                    #    Windows)
 #   ./build.sh --rebuild-strongswan  # force a fresh strongSwan build from source
+#   ./build.sh --rebuild-ipset       # force a fresh ipset build from source
 #   ./build.sh -v 6.0.7              # pin the strongSwan source version to build
-#   ./build.sh clean                   # remove downloaded/built strongSwan artifacts
+#   ./build.sh --ipset-version 7.22  # pin the ipset source version to build
+#   ./build.sh clean                   # remove downloaded/built artifacts
 #   ./build.sh --clean                 # same as clean
 #
 set -euo pipefail
@@ -33,16 +45,21 @@ cd "$ROOT"
 
 # ---------------------------------------------------------------- arguments
 VERSION="latest"
+IPSET_VERSION="6.38"
 SPK_ONLY=false
 REBUILD_SS=false
-CLEAN_SS=false
+REBUILD_IPSET=false
+CLEAN_ALL=false
 while [ $# -gt 0 ]; do
 	case "$1" in
 	-v | --version) VERSION="$2"; shift 2 ;;
 	-v=* | --version=*) VERSION="${1#*=}"; shift ;;
+	--ipset-version) IPSET_VERSION="$2"; shift 2 ;;
+	--ipset-version=*) IPSET_VERSION="${1#*=}"; shift ;;
 	--spk-only) SPK_ONLY=true; shift ;;
 	--rebuild-strongswan) REBUILD_SS=true; shift ;;
-	clean | --clean) CLEAN_SS=true; shift ;;
+	--rebuild-ipset) REBUILD_IPSET=true; shift ;;
+	clean | --clean) CLEAN_ALL=true; shift ;;
 	-h | --help)
 		grep -E '^#( |$)' "$0" | sed -e 's/^#//' -e 's/^ //'
 		exit 0 ;;
@@ -67,6 +84,14 @@ SWANCTLDIR=/var/packages/IKEv2VPN/etc/swanctl
 PIDDIR=/var/packages/IKEv2VPN/var
 SS_STAGE="$ROOT/build/strongswan-stage"          # DESTDIR for 'make install'
 
+IPSET_DIR="$SRC/package/ipset"                   # bundled ipset (SPK source of truth)
+IPSET_BIN="$IPSET_DIR/ipset"
+# libmnl is a build-time dependency of ipset and ships inside the binary, so
+# its version is not something a caller picks per build.
+LIBMNL_VERSION="1.0.5"
+MNL_PREFIX="$ROOT/build/libmnl-install"          # private prefix for the static libmnl
+IPSET_STAGE="$ROOT/build/ipset-stage"            # DESTDIR for 'make install'
+
 # ------------------------------------------------------------------ helpers
 log()  { printf '\n\033[1;32m[*] %s\033[0m\n' "$1"; }
 warn() { printf '\033[1;33m[!] %s\033[0m\n' "$1" >&2; }
@@ -78,12 +103,26 @@ require_tool() { command -v "$1" >/dev/null 2>&1 || die "Required tool not found
 have_prebuilt() {
 	[ -f "$SS_CHARON" ] && [ -f "$SS_SWANCTL" ] && ls "$SS_CONFDIR"/*.conf >/dev/null 2>&1
 }
+# true when the bundled ipset binary is already present under src/
+have_ipset() {
+	[ -f "$IPSET_BIN" ]
+}
 # remove only artifacts created while obtaining/building bundled strongSwan
 clean_strongswan() {
 	log "Removing downloaded and built strongSwan artifacts"
 	rm -rf "$SS_DIR" "$SS_STAGE" "$ROOT/build/strongswan-src.tar.bz2"
 	if [ -d "$ROOT/build" ]; then
 		find "$ROOT/build" -mindepth 1 -maxdepth 1 -type d -name 'strongswan-*' -exec rm -rf {} +
+	fi
+}
+# remove only artifacts created while obtaining/building bundled ipset
+clean_ipset() {
+	log "Removing downloaded and built ipset artifacts"
+	rm -rf "$IPSET_DIR" "$IPSET_STAGE" "$MNL_PREFIX" \
+		"$ROOT/build/ipset-src.tar.bz2" "$ROOT/build/libmnl-src.tar.bz2"
+	if [ -d "$ROOT/build" ]; then
+		find "$ROOT/build" -mindepth 1 -maxdepth 1 -type d \
+			\( -name 'ipset-*' -o -name 'libmnl-*' \) -exec rm -rf {} +
 	fi
 }
 # --------------------------------------------------- stage 1: strongSwan
@@ -207,7 +246,156 @@ ensure_strongswan() {
 	build_strongswan
 }
 
-# ---------------------------------------------------------- stage 2: .spk
+# -------------------------------------------------------- stage 2: ipset
+build_ipset() {
+	$SPK_ONLY && die "No prebuilt ipset available and --spk-only was given. Build ipset first on Linux with: ./build.sh"
+
+	require_tool gcc
+	require_tool make
+	require_tool curl
+	require_tool tar
+	require_tool strip
+	require_tool pkg-config
+
+	mkdir -p "$ROOT/build"
+
+	# --- libmnl, static into a private prefix -------------------------------
+	_mnlurl="https://www.netfilter.org/projects/libmnl/files/libmnl-${LIBMNL_VERSION}.tar.bz2"
+	_mnldl="$ROOT/build/libmnl-src.tar.bz2"
+	log "Downloading libmnl source ($_mnlurl)"
+	curl -fL --retry 3 -o "$_mnldl" "$_mnlurl"
+
+	# Same reason as the strongSwan listing above: `tar tjf | head -n1` kills
+	# tar with SIGPIPE under `set -o pipefail`.
+	_listing="$(tar tjf "$_mnldl")"
+	_first="${_listing%%$'\n'*}"
+	_mnldir="${_first%%/*}"
+	_mnlsrc="$ROOT/build/$_mnldir"
+
+	log "Extracting libmnl ($_mnldir)"
+	rm -rf "$_mnlsrc"
+	tar xjf "$_mnldl" -C "$ROOT/build"
+	rm -f "$_mnldl"
+
+	IPSET_CFLAGS="${CFLAGS:-} -march=x86-64 -O2"
+	# Static only. Nothing shared is produced, so the ipset link below has no
+	# libmnl.so to prefer even when the build machine has one installed.
+	log "Configuring libmnl (static only, prefix $MNL_PREFIX)"
+	rm -rf "$MNL_PREFIX"
+	(
+		cd "$_mnlsrc"
+		CFLAGS="$IPSET_CFLAGS" ./configure \
+			--prefix="$MNL_PREFIX" \
+			--enable-static --disable-shared
+
+		log "Compiling libmnl"
+		make -j1
+
+		log "Installing libmnl into $MNL_PREFIX"
+		make install -j1
+	)
+
+	[ -f "$MNL_PREFIX/lib/libmnl.a" ] || die "libmnl.a was not produced under $MNL_PREFIX/lib"
+	if ls "$MNL_PREFIX"/lib/libmnl.so* >/dev/null 2>&1; then
+		die "libmnl built a shared library despite --disable-shared."
+	fi
+	[ -f "$MNL_PREFIX/lib/pkgconfig/libmnl.pc" ] || die "libmnl.pc is missing; ipset's configure will not find libmnl."
+
+	# --- ipset --------------------------------------------------------------
+	_ipseturl="https://ipset.netfilter.org/ipset-${IPSET_VERSION}.tar.bz2"
+	_ipsetdl="$ROOT/build/ipset-src.tar.bz2"
+	log "Downloading ipset source ($_ipseturl)"
+	curl -fL --retry 3 -o "$_ipsetdl" "$_ipseturl"
+
+	_listing="$(tar tjf "$_ipsetdl")"
+	_first="${_listing%%$'\n'*}"
+	_ipsetdir="${_first%%/*}"
+	_ipsetsrc="$ROOT/build/$_ipsetdir"
+
+	log "Extracting ipset ($_ipsetdir)"
+	rm -rf "$_ipsetsrc"
+	tar xjf "$_ipsetdl" -C "$ROOT/build"
+	rm -f "$_ipsetdl"
+
+	# --with-kmod=no: the kernel side is already on DSM, and modules built here
+	#   would not match the DSM kernel anyway.
+	# --disable-shared: libipset is linked into the binary instead of shipping
+	#   beside it, the same reason libmnl is static.
+	# PKG_CONFIG_PATH puts our own libmnl first so its .a is what gets linked.
+	#   --prefix only decides where 'make install' writes; ipset does not read
+	#   it back at run time, so the value is not a DSM path.
+	log "Configuring ipset (kernel modules off, libmnl and libipset static)"
+	rm -rf "$IPSET_STAGE"
+	(
+		cd "$_ipsetsrc"
+		export PKG_CONFIG_PATH="$MNL_PREFIX/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+		CFLAGS="$IPSET_CFLAGS" \
+		LDFLAGS="${LDFLAGS:-} -L$MNL_PREFIX/lib" \
+		./configure \
+			--prefix=/usr \
+			--with-kmod=no \
+			--enable-static --disable-shared
+
+		log "Compiling ipset"
+		make -j1
+
+		log "Installing to staging (DESTDIR=$IPSET_STAGE)"
+		mkdir -p "$IPSET_STAGE"
+		make install -j1 DESTDIR="$IPSET_STAGE"
+	)
+
+	_ipset="$(find "$IPSET_STAGE" -type f -name ipset -perm -u+x | head -n1)"
+	[ -n "$_ipset" ] || die "No ipset binary found under $IPSET_STAGE"
+
+	log "Verifying build (single executable, no libmnl or libipset beside it)"
+	if find "$IPSET_STAGE" -name 'libipset.so*' | grep -q .; then
+		find "$IPSET_STAGE" -name 'libipset.so*' >&2
+		die "ipset built libipset as a shared library rather than linking it in."
+	fi
+	file "$_ipset"
+	if ldd "$_ipset" | grep -qE "libmnl|libipset"; then
+		ldd "$_ipset" >&2
+		die "$_ipset still depends on libmnl or libipset at run time."
+	fi
+	if ldd "$_ipset" | grep -qi "not found"; then
+		ldd "$_ipset" >&2
+		die "$_ipset has unresolved shared libraries."
+	fi
+
+	log "Stripping binary"
+	strip "$_ipset"
+
+	log "Installing the ipset binary into src/package/ipset/"
+	rm -rf "$IPSET_DIR"
+	mkdir -p "$IPSET_DIR"
+	cp -p "$_ipset" "$IPSET_BIN"
+
+	# keep the bundled licence notices in sync with the built versions
+	mkdir -p "$ROOT/licenses"
+	if [ -f "$_ipsetsrc/COPYING" ]; then
+		cp -p "$_ipsetsrc/COPYING" "$ROOT/licenses/ipset-LICENSE.txt"
+	fi
+	if [ -f "$_mnlsrc/COPYING" ]; then
+		cp -p "$_mnlsrc/COPYING" "$ROOT/licenses/libmnl-LICENSE.txt"
+	fi
+
+	have_ipset || die "Post-build check failed: ipset binary missing under src/package/ipset/"
+}
+
+# decide how to obtain ipset for the .spk
+ensure_ipset() {
+	if $REBUILD_IPSET; then
+		build_ipset
+		return
+	fi
+	if have_ipset; then
+		log "Prebuilt ipset found under src/package/ipset/ - skipping source build"
+		return
+	fi
+	build_ipset
+}
+
+# ---------------------------------------------------------- stage 3: .spk
 build_spk() {
 	require_tool tar
 	require_tool sed
@@ -232,13 +420,14 @@ build_spk() {
 	cp "$ROOT"/licenses/*.txt "$STAGE/package/licenses/" 2>/dev/null || true
 
 	# Normalize CRLF -> LF for text files (safe on Windows checkouts). Exclude
-	# PNGs and EVERY bundled strongSwan binary: running 's/\r$//' on an ELF
-	# silently strips any byte ending in 0x0D and corrupts it. Excluding by
-	# directory (libexec/ipsec + sbin) covers charon/xfrmi/_updown/swanctl and
-	# any future binary without having to name each one.
+	# PNGs and EVERY bundled binary: running 's/\r$//' on an ELF silently
+	# strips any byte ending in 0x0D and corrupts it. Excluding by directory
+	# (libexec/ipsec + sbin + ipset) covers charon/xfrmi/_updown/swanctl/ipset
+	# and any future binary without having to name each one.
 	find "$STAGE" -type f ! -iname '*.png' \
 		! -path '*/strongswan/libexec/ipsec/*' \
 		! -path '*/strongswan/sbin/*' \
+		! -path '*/package/ipset/*' \
 		-exec sed -i 's/\r$//' {} +
 
 	# Conventional permissions: dirs 755, data files 644, executables 755.
@@ -247,12 +436,13 @@ build_spk() {
 	chmod 755 "$STAGE/package/bin/"* "$STAGE/package/ui/"*.cgi
 	find "$STAGE/package/strongswan/libexec/ipsec" -type f -exec chmod 755 {} + 2>/dev/null || true
 	find "$STAGE/package/strongswan/sbin" -type f -exec chmod 755 {} + 2>/dev/null || true
+	find "$STAGE/package/ipset" -type f -exec chmod 755 {} + 2>/dev/null || true
 
 	log "Creating package.tgz"
 	# On Windows/NTFS via Git Bash, chmod does not reliably stick on raw ELF
 	# binaries (it works fine on shebang scripts). Force their executable bit
 	# into the tar header directly instead: build package.tar in two passes -
-	# everything except the strongSwan binary dirs first, then those dirs with
+	# everything except the binary dirs first, then those dirs with
 	# --mode=0755 appended.
 	PKG_TAR="$STAGE/package.tar"
 	tar -cf "$PKG_TAR" \
@@ -260,11 +450,12 @@ build_spk() {
 		-C "$STAGE/package" \
 		--exclude='./strongswan/libexec/ipsec' \
 		--exclude='./strongswan/sbin' \
+		--exclude='./ipset' \
 		.
 	tar -rf "$PKG_TAR" \
 		--owner=0 --group=0 --numeric-owner --mode=0755 \
 		-C "$STAGE/package" \
-		./strongswan/libexec/ipsec ./strongswan/sbin
+		./strongswan/libexec/ipsec ./strongswan/sbin ./ipset
 	gzip -n -9 -c "$PKG_TAR" > "$STAGE/package.tgz"
 	rm -f "$PKG_TAR"
 	rm -rf "$STAGE/package"
@@ -288,10 +479,12 @@ build_spk() {
 }
 
 # -------------------------------------------------------------------- main
-if $CLEAN_SS; then
+if $CLEAN_ALL; then
 	clean_strongswan
+	clean_ipset
 	exit 0
 fi
 
 ensure_strongswan
+ensure_ipset
 build_spk
