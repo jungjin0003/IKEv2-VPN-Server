@@ -33,10 +33,12 @@
 #                                    #    Windows)
 #   ./build.sh --rebuild-strongswan  # force a fresh strongSwan build from source
 #   ./build.sh --rebuild-ipset       # force a fresh ipset build from source
-#   ./build.sh -v 6.0.7              # pin the strongSwan source version to build
-#   ./build.sh --ipset-version 7.22  # pin the ipset source version to build
-#   ./build.sh clean                   # remove downloaded/built artifacts
-#   ./build.sh --clean                 # same as clean
+#   ./build.sh --strongswan-version 6.0.7   # pin the strongSwan source version
+#   ./build.sh --ipset-version 7.22         # pin the ipset source version
+#   ./build.sh clean                 # remove everything downloaded and built
+#   ./build.sh --clean               # same as clean
+#   ./build.sh --clean-strongswan    # remove only the strongSwan artifacts
+#   ./build.sh --clean-ipset         # remove only the ipset artifacts
 #
 set -euo pipefail
 
@@ -44,22 +46,25 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT"
 
 # ---------------------------------------------------------------- arguments
-VERSION="latest"
+SS_VERSION="latest"
 IPSET_VERSION="6.38"
 SPK_ONLY=false
 REBUILD_SS=false
 REBUILD_IPSET=false
-CLEAN_ALL=false
+CLEAN_SS=false
+CLEAN_IPSET=false
 while [ $# -gt 0 ]; do
 	case "$1" in
-	-v | --version) VERSION="$2"; shift 2 ;;
-	-v=* | --version=*) VERSION="${1#*=}"; shift ;;
+	--strongswan-version) SS_VERSION="$2"; shift 2 ;;
+	--strongswan-version=*) SS_VERSION="${1#*=}"; shift ;;
 	--ipset-version) IPSET_VERSION="$2"; shift 2 ;;
 	--ipset-version=*) IPSET_VERSION="${1#*=}"; shift ;;
 	--spk-only) SPK_ONLY=true; shift ;;
 	--rebuild-strongswan) REBUILD_SS=true; shift ;;
 	--rebuild-ipset) REBUILD_IPSET=true; shift ;;
-	clean | --clean) CLEAN_ALL=true; shift ;;
+	clean | --clean) CLEAN_SS=true; CLEAN_IPSET=true; shift ;;
+	--clean-strongswan) CLEAN_SS=true; shift ;;
+	--clean-ipset) CLEAN_IPSET=true; shift ;;
 	-h | --help)
 		grep -E '^#( |$)' "$0" | sed -e 's/^#//' -e 's/^ //'
 		exit 0 ;;
@@ -78,10 +83,10 @@ STAGE="$ROOT/build/stage"                        # .spk staging area
 DIST="$ROOT/dist"
 
 # strongSwan source-build install layout (compiled-in --prefix etc.)
-PREFIX=/var/packages/IKEv2VPN/target/strongswan
-SYSCONFDIR=/var/packages/IKEv2VPN/etc
-SWANCTLDIR=/var/packages/IKEv2VPN/etc/swanctl
-PIDDIR=/var/packages/IKEv2VPN/var
+SS_PREFIX=/var/packages/IKEv2VPN/target/strongswan
+SS_SYSCONFDIR=/var/packages/IKEv2VPN/etc
+SS_SWANCTLDIR=/var/packages/IKEv2VPN/etc/swanctl
+SS_PIDDIR=/var/packages/IKEv2VPN/var
 SS_STAGE="$ROOT/build/strongswan-stage"          # DESTDIR for 'make install'
 
 IPSET_DIR="$SRC/package/ipset"                   # bundled ipset (SPK source of truth)
@@ -100,7 +105,7 @@ die()  { printf '\033[1;31m[x] %s\033[0m\n' "$1" >&2; exit 1; }
 require_tool() { command -v "$1" >/dev/null 2>&1 || die "Required tool not found: $1"; }
 
 # true when the minimal runtime files are already present under src/
-have_prebuilt() {
+have_strongswan() {
 	[ -f "$SS_CHARON" ] && [ -f "$SS_SWANCTL" ] && ls "$SS_CONFDIR"/*.conf >/dev/null 2>&1
 }
 # true when the bundled ipset binary is already present under src/
@@ -138,10 +143,10 @@ build_strongswan() {
 		die "libgmp-dev (gmp.h) not found. Install it, e.g. 'sudo apt-get install libgmp-dev'."
 	fi
 
-	if [ "$VERSION" = "latest" ]; then
+	if [ "$SS_VERSION" = "latest" ]; then
 		_srctar="strongswan.tar.bz2"
 	else
-		_srctar="strongswan-${VERSION}.tar.bz2"
+		_srctar="strongswan-${SS_VERSION}.tar.bz2"
 	fi
 	_url="https://download.strongswan.org/${_srctar}"
 	_dl="$ROOT/build/strongswan-src.tar.bz2"
@@ -171,10 +176,10 @@ build_strongswan() {
 		cd "$_srcdir"
 		make distclean >/dev/null 2>&1 || true
 		CFLAGS="$SS_CFLAGS" ./configure \
-			--prefix="$PREFIX" \
-			--sysconfdir="$SYSCONFDIR" \
-			--with-swanctldir="$SWANCTLDIR" \
-			--with-piddir="$PIDDIR" \
+			--prefix="$SS_PREFIX" \
+			--sysconfdir="$SS_SYSCONFDIR" \
+			--with-swanctldir="$SS_SWANCTLDIR" \
+			--with-piddir="$SS_PIDDIR" \
 			--disable-shared --enable-static --enable-monolithic \
 			--enable-charon \
 			--enable-ikev2 --disable-ikev1 \
@@ -196,13 +201,13 @@ build_strongswan() {
 		make install -j1 DESTDIR="$SS_STAGE"
 	)
 
-	_charon="$SS_STAGE$PREFIX/libexec/ipsec/charon"
-	_swanctl="$SS_STAGE$PREFIX/sbin/swanctl"
-	_confdir="$SS_STAGE$SYSCONFDIR/strongswan.d/charon"
+	_charon="$SS_STAGE$SS_PREFIX/libexec/ipsec/charon"
+	_swanctl="$SS_STAGE$SS_PREFIX/sbin/swanctl"
+	_confdir="$SS_STAGE$SS_SYSCONFDIR/strongswan.d/charon"
 
 	log "Verifying build (monolithic, libgmp linkage)"
-	if find "$SS_STAGE$PREFIX" -name '*.so*' | grep -q .; then
-		find "$SS_STAGE$PREFIX" -name '*.so*' >&2
+	if find "$SS_STAGE$SS_PREFIX" -name '*.so*' | grep -q .; then
+		find "$SS_STAGE$SS_PREFIX" -name '*.so*' >&2
 		die "strongSwan plugins were built as separate .so files (not monolithic)."
 	fi
 	for _b in "$_charon" "$_swanctl"; do
@@ -230,7 +235,7 @@ build_strongswan() {
 		cp -p "$_srcdir/LICENSE" "$ROOT/licenses/strongswan-LICENSE.txt"
 	fi
 
-	have_prebuilt || die "Post-build check failed: strongSwan files missing under src/package/strongswan/"
+	have_strongswan || die "Post-build check failed: strongSwan files missing under src/package/strongswan/"
 }
 
 # decide how to obtain strongSwan for the .spk
@@ -239,7 +244,7 @@ ensure_strongswan() {
 		build_strongswan
 		return
 	fi
-	if have_prebuilt; then
+	if have_strongswan; then
 		log "Prebuilt strongSwan found under src/package/strongswan/ - skipping source build"
 		return
 	fi
@@ -479,9 +484,9 @@ build_spk() {
 }
 
 # -------------------------------------------------------------------- main
-if $CLEAN_ALL; then
-	clean_strongswan
-	clean_ipset
+if $CLEAN_SS || $CLEAN_IPSET; then
+	if $CLEAN_SS; then clean_strongswan; fi
+	if $CLEAN_IPSET; then clean_ipset; fi
 	exit 0
 fi
 
