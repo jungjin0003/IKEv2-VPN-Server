@@ -155,4 +155,7 @@ table{width:100%;border-collapse:collapse}
 #busy .busy-msg{font-size:14px;font-weight:700;color:var(--txt)}
 #busy .busy-sub{font-size:12px;color:var(--sub);margin-top:5px}
 @keyframes busy-spin{to{transform:rotate(360deg)}}
-@media (prefers-reduced-motion:reduce){#busy{transition:none}#busy .spinner{animation:none}}
+/* The overlay's fade is decoration and goes. The spinner's rotation stays: it
+   is the only thing on the overlay that says the work is still running, and a
+   circle standing still reads as a page that has stopped responding. */
+@media (prefers-reduced-motion:reduce){#busy{transition:none}}
