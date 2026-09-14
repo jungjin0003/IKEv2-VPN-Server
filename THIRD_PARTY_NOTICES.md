@@ -92,6 +92,56 @@ required notices:
   so the package needs no build tooling and loads nothing from the network.
 
 ---
+## 4. ipset (bundled: the ipset command line tool)
+
+- **Version:** 6.38
+- **Files:** `target/ipset/ipset`.
+- **License:** GPL-2.0-only. The verbatim license text is in
+  [`licenses/ipset-LICENSE.txt`](licenses/ipset-LICENSE.txt); the GPLv2 body is
+  also in [`LICENSE`](LICENSE).
+- **Copyright:** © Jozsef Kadlecsik and the Netfilter project (see the source
+  files for per-file copyright information).
+- **Upstream / source:** <https://ipset.netfilter.org/> ·
+  source tarball <https://ipset.netfilter.org/ipset-6.38.tar.bz2> ·
+  git <https://git.netfilter.org/ipset/>.
+
+### Written offer for corresponding source (GPLv2 §3)
+
+The ipset binary in this package is distributed in compiled form. The complete
+corresponding source code is the unmodified ipset 6.38 release available at the
+upstream URLs above. This package applies **no source modifications** to ipset;
+it only compiles it with a fixed set of configure options. The exact build
+recipe (download, configure flags, install layout) is the
+[`build.sh`](build.sh) script in this repository, which reproduces the bundled
+binary. If for any reason the upstream source becomes unavailable, the
+maintainer will provide a copy of the corresponding source on request.
+
+---
+
+## 5. libmnl (bundled: statically linked into the ipset binary)
+
+- **Version:** 1.0.5
+- **Files:** none of its own. libmnl is compiled as a static library and linked
+  into `target/ipset/ipset`, so no `libmnl.so` ships with the package.
+- **License:** LGPL-2.1-or-later. The verbatim license text is in
+  [`licenses/libmnl-LICENSE.txt`](licenses/libmnl-LICENSE.txt).
+- **Copyright:** © Pablo Neira Ayuso and the Netfilter project (see the source
+  files for per-file copyright information).
+- **Upstream / source:** <https://netfilter.org/projects/libmnl/> ·
+  source tarball <https://www.netfilter.org/projects/libmnl/files/libmnl-1.0.5.tar.bz2> ·
+  git <https://git.netfilter.org/libmnl/>.
+
+### Relinking the bundled ipset with a modified libmnl (LGPL-2.1 §6)
+
+Because libmnl is linked statically, the LGPL requires the means to relink the
+resulting work against a modified libmnl. The [`build.sh`](build.sh) script in
+this repository is that means: it downloads libmnl 1.0.5 and ipset 6.38,
+builds libmnl into a private prefix, and links ipset against it. Pointing the
+libmnl stage at a modified source tree and rerunning the script produces an
+ipset binary linked against that version. The maintainer will provide the
+corresponding source and object files on request.
+
+---
 
 ## Icon
 
