@@ -139,6 +139,9 @@ build_strongswan() {
 	require_tool curl
 	require_tool tar
 	require_tool strip
+	# --enable-monolithic resolves the plugin constructors through a Python
+	# script, so configure fails without it rather than falling back.
+	require_tool python3
 	if [ ! -f /usr/include/gmp.h ] && [ ! -f /usr/include/x86_64-linux-gnu/gmp.h ]; then
 		die "libgmp-dev (gmp.h) not found. Install it, e.g. 'sudo apt-get install libgmp-dev'."
 	fi
