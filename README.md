@@ -62,6 +62,30 @@ Logging in with DSM user accounts over MSCHAPv2 (username/password) requires the
     - `sudo /var/packages/IKEv2VPN/target/bin/ikev2-setup remove`
 2. Remove the package from **Package Center**.
 
+## Build
+
+### Build host
+- Linux x86_64
+- glibc 2.36 or older
+- Debian 12 or Ubuntu 22.04
+
+### Dependencies
+```sh
+sudo apt-get update
+sudo apt-get install -y git build-essential curl ca-certificates bzip2 \
+                        file pkg-config libgmp-dev python3
+```
+
+### Build
+```sh
+git clone https://github.com/jungjin0003/IKEv2-VPN-Server.git
+cd IKEv2-VPN-Server
+./build.sh
+```
+
+### Windows
+`build.ps1` runs `build.sh --spk-only` through Git Bash. It assembles the `.spk` from binaries a Linux build already produced and never compiles, so `src/package/strongswan/` and `src/package/ipset/` have to be in place first.
+
 ## License
 
 This package is distributed under **GPL-2.0-or-later** ([`LICENSE`](LICENSE)). It bundles the `charon`/`swanctl` binaries of strongSwan 6.0.7 (GPL-2.0-or-later, with the OpenSSL linking exception) and, for the management UI, the Preact + htm bundle (MIT / Apache-2.0); GMP (LGPL/GPL) is only dynamically linked, not bundled. For the third-party notices and the written offer for corresponding source, see [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).

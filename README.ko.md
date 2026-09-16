@@ -65,6 +65,30 @@ MSCHAPv2(ID/PW) 인증 방식을 이용해 DSM 사용자 계정을 통해 로그
     - `sudo /var/packages/IKEv2VPN/target/bin/ikev2-setup remove`
 2. "패키지 센터"에서 패키지 제거
 
+## 빌드 방법
+
+### 빌드 환경
+- Linux x86_64
+- glibc 2.36 이하
+- Debian 12 또는 Ubuntu 22.04
+
+### 의존 패키지
+```sh
+sudo apt-get update
+sudo apt-get install -y git build-essential curl ca-certificates bzip2 \
+                        file pkg-config libgmp-dev python3
+```
+
+### 빌드
+```sh
+git clone https://github.com/jungjin0003/IKEv2-VPN-Server.git
+cd IKEv2-VPN-Server
+./build.sh
+```
+
+### Windows
+`build.ps1`은 Git Bash를 통해 `build.sh --spk-only`를 실행합니다. 리눅스 빌드가 이미 만들어 둔 바이너리로 `.spk`를 조립할 뿐 컴파일하지 않으므로 `src/package/strongswan/`과 `src/package/ipset/`이 먼저 준비되어 있어야 합니다.
+
 ## 라이선스
 
 이 패키지는 **GPL-2.0-or-later**로 배포됩니다 ([`LICENSE`](LICENSE)).
