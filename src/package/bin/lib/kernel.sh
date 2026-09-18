@@ -11,7 +11,7 @@
 
 # IPsec datapath, then netfilter/NAT - order matters (deps first).
 IPSEC_MODS="xfrm_algo xfrm_user af_key ah4 esp4 tunnel4 xfrm4_tunnel xfrm4_mode_tunnel xfrm4_mode_transport"
-NAT_MODS="x_tables ip_tables nf_conntrack nf_defrag_ipv4 nf_conntrack_ipv4 iptable_filter nf_nat nf_nat_ipv4 iptable_nat nf_nat_masquerade_ipv4 ipt_MASQUERADE"
+NAT_MODS="x_tables ip_tables nf_conntrack nf_defrag_ipv4 nf_conntrack_ipv4 iptable_filter nf_nat nf_nat_ipv4 iptable_nat nf_nat_masquerade_ipv4 ipt_MASQUERADE nfnetlink ip_set ip_set_hash_ip xt_set"
 
 # Load one module by name from the running DSM firmware's own module set.
 # Already-loaded or absent-everywhere modules are non-fatal (some kernels
