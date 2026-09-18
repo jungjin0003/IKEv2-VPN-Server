@@ -182,9 +182,9 @@ denied_ips() {
 # --------------------------------------------------------- VPN-side blocking
 #
 # DSM's auto-block database protects DSM services, but it does not necessarily
-# stop packets before they reach this package's charon listener. Keep a small,
-# package-owned INPUT chain in sync with the same database so denied addresses
-# are rejected on UDP 500/4500 and native ESP (protocol 50) as well.
+# stop packets before they reach this package's charon listener. Keep one
+# package-owned INPUT chain and one address set in sync with the same database
+# so denied addresses are rejected on UDP 500/4500 and native ESP (protocol 50).
 #
 # The chain does not follow the service. What it denies is this package's own
 # ports and nothing else, so it stays up across a stop, a restart and an
@@ -192,111 +192,140 @@ denied_ips() {
 # charon the moment the service came back. Two things take it down: turning
 # the package option off, and uninstalling the package.
 
+BLOCK_SET="IKEV2VPN_BLOCK_SET"
+BLOCK_SET_NEW="IKEV2VPN_BLOCK_SET_NEW"
+FIREWALL_RETRIES=3
+
 iptables_bin() {
     command -v iptables 2>/dev/null
 }
 
-# Two chains, one of them live at a time. A change is built in whichever is
-# idle and the jump is then moved onto it, so the addresses already denied
-# stay denied throughout - flushing the live chain and refilling it would
-# leave a gap on every pass.
-block_chains() {
-    printf '%s\n%s\n' "$BLOCK_CHAIN" "${BLOCK_CHAIN}2"
+ipset_bin() {
+    [ -x "${PKG_DIR}/target/ipset/ipset" ] && {
+        printf '%s\n' "${PKG_DIR}/target/ipset/ipset"
+        return 0
+    }
+    command -v ipset 2>/dev/null
 }
 
-# The chain INPUT currently jumps to, if any.
-block_live() {
+block_parent() {
     IPT=$(iptables_bin); [ -n "$IPT" ] || return 1
-    for C in $(block_chains); do
-        "$IPT" -C INPUT -j "$C" 2>/dev/null && { printf '%s\n' "$C"; return 0; }
+    for _parent in INPUT DEFAULT_INPUT; do
+        "$IPT" -C "$_parent" -j "$BLOCK_CHAIN" 2>/dev/null && {
+            printf '%s\n' "$_parent"
+            return 0
+        }
     done
     return 1
 }
 
-# The addresses a chain denies, one per line, sorted - comparable with the
-# set that is wanted.
+block_live() {
+    block_parent >/dev/null
+}
+
+firewall_retry() {
+    _n=1
+    while [ "$_n" -le "$FIREWALL_RETRIES" ]; do
+        "$@" 2>/dev/null && return 0
+        [ "$_n" -lt "$FIREWALL_RETRIES" ] && sleep 1
+        _n=$((_n + 1))
+    done
+    return 1
+}
+
 block_contents() {
+    IPSET=$(ipset_bin); [ -n "$IPSET" ] || return 1
+    "$IPSET" save "$BLOCK_SET" 2>/dev/null |
+        sed -n "s/^add ${BLOCK_SET} \([^ ]*\).*$/\1/p" | sort -u
+}
+
+block_chain_ready() {
     IPT=$(iptables_bin); [ -n "$IPT" ] || return 1
-    "$IPT" -S "$1" 2>/dev/null |
-        sed -n 's/^-A [^ ]* -s \([0-9.]*\)\(\/32\)\{0,1\} .*/\1/p' | sort -u
+    block_live || return 1
+    firewall_retry "$IPT" -C "$BLOCK_CHAIN" -m set --match-set "$BLOCK_SET" src -p udp --dport 500 -j DROP || return 1
+    firewall_retry "$IPT" -C "$BLOCK_CHAIN" -m set --match-set "$BLOCK_SET" src -p udp --dport 4500 -j DROP || return 1
+    firewall_retry "$IPT" -C "$BLOCK_CHAIN" -m set --match-set "$BLOCK_SET" src -p 50 -j DROP
+}
+
+block_chain_install() {
+    IPT=$(iptables_bin); [ -n "$IPT" ] || return 1
+    block_chain_ready && return 0
+    while block_live; do
+        _parent=$(block_parent) || return 1
+        firewall_retry "$IPT" -D "$_parent" -j "$BLOCK_CHAIN" || return 1
+    done
+    firewall_retry "$IPT" -N "$BLOCK_CHAIN" || true
+    firewall_retry "$IPT" -F "$BLOCK_CHAIN" || return 1
+    firewall_retry "$IPT" -A "$BLOCK_CHAIN" -m set --match-set "$BLOCK_SET" src -p udp --dport 500 -j DROP || return 1
+    firewall_retry "$IPT" -A "$BLOCK_CHAIN" -m set --match-set "$BLOCK_SET" src -p udp --dport 4500 -j DROP || return 1
+    firewall_retry "$IPT" -A "$BLOCK_CHAIN" -m set --match-set "$BLOCK_SET" src -p 50 -j DROP || return 1
+    firewall_retry "$IPT" -I INPUT 1 -j "$BLOCK_CHAIN" || return 1
 }
 
 block_remove() {
     [ "$(id -u)" = "0" ] || return 0
-    IPT=$(iptables_bin); [ -n "$IPT" ] || return 0
+    IPT=$(iptables_bin); IPSET=$(ipset_bin)
+    [ -n "$IPT" ] || return 0
 
-    for C in $(block_chains); do
-        while "$IPT" -C INPUT -j "$C" 2>/dev/null; do
-            "$IPT" -D INPUT -j "$C" 2>/dev/null || break
+    for C in "$BLOCK_CHAIN" "${BLOCK_CHAIN}2"; do
+        for _parent in INPUT DEFAULT_INPUT; do
+            while "$IPT" -C "$_parent" -j "$C" 2>/dev/null; do
+                firewall_retry "$IPT" -D "$_parent" -j "$C" || break
+            done
         done
-        "$IPT" -F "$C" 2>/dev/null
-        "$IPT" -X "$C" 2>/dev/null
+        if "$IPT" -S "$C" >/dev/null 2>&1; then
+            firewall_retry "$IPT" -F "$C" || true
+            firewall_retry "$IPT" -X "$C" || true
+        fi
     done
+    [ -n "$IPSET" ] || return 0
+    firewall_retry "$IPSET" destroy "$BLOCK_SET_NEW" || true
+    firewall_retry "$IPSET" destroy "$BLOCK_SET" || true
 }
 
-# block_fill <chain> <addresses> - the chain is left holding exactly these.
-block_fill() {
-    CHAIN="$1"; shift
-    IPT=$(iptables_bin); [ -n "$IPT" ] || return 1
-
-    "$IPT" -N "$CHAIN" 2>/dev/null
-    "$IPT" -F "$CHAIN" 2>/dev/null || return 1
-    for IP in $@; do
+block_set_fill() {
+    IPSET=$(ipset_bin); [ -n "$IPSET" ] || return 1
+    firewall_retry "$IPSET" create "$BLOCK_SET_NEW" hash:ip family inet -exist || return 1
+    firewall_retry "$IPSET" flush "$BLOCK_SET_NEW" || return 1
+    for IP in $1; do
         valid_ipv4 "$IP" || continue
-        "$IPT" -A "$CHAIN" -s "$IP" -p udp --dport 500 -j DROP 2>/dev/null &&
-        "$IPT" -A "$CHAIN" -s "$IP" -p udp --dport 4500 -j DROP 2>/dev/null &&
-        "$IPT" -A "$CHAIN" -s "$IP" -p 50 -j DROP 2>/dev/null ||
-            log "WARN: failed to add VPN block rule for $IP"
+        firewall_retry "$IPSET" add "$BLOCK_SET_NEW" "$IP" || return 1
     done
 }
 
-# block_swap <chain> - INPUT jumps to this one and to no other of ours.
-#
-# The new jump goes in before the old one comes out, and it goes in at the
-# top so a broader DSM rule cannot accept the packet first.
-block_swap() {
-    IPT=$(iptables_bin); [ -n "$IPT" ] || return 1
-
-    "$IPT" -C INPUT -j "$1" 2>/dev/null ||
-        "$IPT" -I INPUT 1 -j "$1" 2>/dev/null || return 1
-
-    for C in $(block_chains); do
-        [ "$C" = "$1" ] && continue
-        while "$IPT" -C INPUT -j "$C" 2>/dev/null; do
-            "$IPT" -D INPUT -j "$C" 2>/dev/null || break
-        done
-        "$IPT" -F "$C" 2>/dev/null
-    done
+block_set_swap() {
+    IPSET=$(ipset_bin); [ -n "$IPSET" ] || return 1
+    firewall_retry "$IPSET" create "$BLOCK_SET" hash:ip family inet -exist || return 1
+    firewall_retry "$IPSET" swap "$BLOCK_SET_NEW" "$BLOCK_SET" || return 1
+    firewall_retry "$IPSET" destroy "$BLOCK_SET_NEW" || return 1
 }
 
 sync_block_rules() {
     [ "$(id -u)" = "0" ] || return 0
-    IPT=$(iptables_bin); [ -n "$IPT" ] || return 0
+    IPT=$(iptables_bin); IPSET=$(ipset_bin)
+    [ -n "$IPT" ] && [ -n "$IPSET" ] || return 0
 
-    # Turning the package option off removes only this package's chains. DSM's
-    # own database and unrelated firewall rules are left untouched.
+    # Turning the package option off removes only this package's chain and set.
+    # DSM's own database and unrelated firewall rules are left untouched.
     if [ "$IKEV2_AUTOBLOCK" != "yes" ]; then
         block_remove
         return 0
     fi
 
-    # Do not clear a working deny chain just because DSM's database is
-    # temporarily unavailable or locked.
+    # Do not clear a working deny set just because DSM's database is temporarily
+    # unavailable or locked.
     IPS=$(denied_ips 2>/dev/null) || return 0
-
     WANT=$(printf '%s\n' $IPS | sed '/^$/d' | sort -u)
-    LIVE=$(block_live)
-    if [ -n "$LIVE" ] && [ "$WANT" = "$(block_contents "$LIVE")" ]; then
+    CURRENT=$(block_contents)
+    if block_live && [ "$WANT" = "$CURRENT" ]; then
         return 0
     fi
 
-    # Fill the one that is not carrying traffic, then move the jump to it.
-    NEXT="$BLOCK_CHAIN"
-    [ "$LIVE" = "$BLOCK_CHAIN" ] && NEXT="${BLOCK_CHAIN}2"
-    block_fill "$NEXT" $WANT || return 0
-    block_swap "$NEXT" || return 0
+    block_set_fill "$WANT" || return 0
+    block_set_swap || return 0
+    block_chain_install || return 0
 
-    log "VPN block chain updated ($(printf '%s\n' $WANT | sed '/^$/d' | wc -l | tr -d ' ') addresses)"
+    log "VPN block set updated ($(printf '%s\n' $WANT | sed '/^$/d' | wc -l | tr -d ' ') addresses)"
 }
 
 # ------------------------------------------------------------ log scanning
