@@ -96,6 +96,9 @@ IPSET_BIN="$IPSET_DIR/ipset"
 LIBMNL_VERSION="1.0.5"
 MNL_PREFIX="$ROOT/build/libmnl-install"          # private prefix for the static libmnl
 IPSET_STAGE="$ROOT/build/ipset-stage"            # DESTDIR for 'make install'
+# each build stage records what it produced beside the binaries it produced
+SS_VERSION_FILE="$SS_DIR/VERSION"
+IPSET_VERSION_FILE="$IPSET_DIR/VERSION"
 
 # ------------------------------------------------------------------ helpers
 log()  { printf '\n\033[1;32m[*] %s\033[0m\n' "$1"; }
@@ -103,6 +106,27 @@ warn() { printf '\033[1;33m[!] %s\033[0m\n' "$1" >&2; }
 die()  { printf '\033[1;31m[x] %s\033[0m\n' "$1" >&2; exit 1; }
 
 require_tool() { command -v "$1" >/dev/null 2>&1 || die "Required tool not found: $1"; }
+
+# read one 'key=value' line out of a VERSION file
+version_field() {
+	sed -n "s/^$2=//p" "$1" | sed -n '1p'
+}
+
+# load the versions the build stages recorded next to what they produced
+require_bundled_versions() {
+	[ -f "$SS_VERSION_FILE" ] \
+		|| die "$SS_VERSION_FILE not found. Rebuild strongSwan on Linux with: ./build.sh --rebuild-strongswan"
+	[ -f "$IPSET_VERSION_FILE" ] \
+		|| die "$IPSET_VERSION_FILE not found. Rebuild ipset on Linux with: ./build.sh --rebuild-ipset"
+
+	BUNDLED_STRONGSWAN_VERSION="$(sed -n '1p' "$SS_VERSION_FILE")"
+	BUNDLED_IPSET_VERSION="$(version_field "$IPSET_VERSION_FILE" ipset)"
+	BUNDLED_LIBMNL_VERSION="$(version_field "$IPSET_VERSION_FILE" libmnl)"
+
+	[ -n "$BUNDLED_STRONGSWAN_VERSION" ] || die "$SS_VERSION_FILE is empty"
+	[ -n "$BUNDLED_IPSET_VERSION" ] || die "ipset= is missing from $IPSET_VERSION_FILE"
+	[ -n "$BUNDLED_LIBMNL_VERSION" ] || die "libmnl= is missing from $IPSET_VERSION_FILE"
+}
 
 # true when the minimal runtime files are already present under src/
 have_strongswan() {
@@ -232,6 +256,10 @@ build_strongswan() {
 	cp -p "$_swanctl" "$SS_SWANCTL"
 	cp -p "$_confdir"/*.conf "$SS_CONFDIR/"
 
+	# charon carries no version marker that survives stripping, so the
+	# version the source tarball named is recorded next to the binaries
+	printf '%s\n' "$_ver" > "$SS_VERSION_FILE"
+
 	# keep the bundled strongSwan license notice in sync with the built version
 	if [ -f "$_srcdir/LICENSE" ]; then
 		mkdir -p "$ROOT/licenses"
@@ -279,6 +307,7 @@ build_ipset() {
 	_first="${_listing%%$'\n'*}"
 	_mnldir="${_first%%/*}"
 	_mnlsrc="$ROOT/build/$_mnldir"
+	_mnlver="${_mnldir#libmnl-}"
 
 	log "Extracting libmnl ($_mnldir)"
 	rm -rf "$_mnlsrc"
@@ -319,6 +348,7 @@ build_ipset() {
 	_first="${_listing%%$'\n'*}"
 	_ipsetdir="${_first%%/*}"
 	_ipsetsrc="$ROOT/build/$_ipsetdir"
+	_ipsetver="${_ipsetdir#ipset-}"
 
 	log "Extracting ipset ($_ipsetdir)"
 	rm -rf "$_ipsetsrc"
@@ -378,6 +408,13 @@ build_ipset() {
 	mkdir -p "$IPSET_DIR"
 	cp -p "$_ipset" "$IPSET_BIN"
 
+	# libmnl is linked in statically and leaves no marker in the binary, so
+	# both versions are recorded next to the binary they went into
+	{
+		printf 'ipset=%s\n' "$_ipsetver"
+		printf 'libmnl=%s\n' "$_mnlver"
+	} > "$IPSET_VERSION_FILE"
+
 	# keep the bundled licence notices in sync with the built versions
 	mkdir -p "$ROOT/licenses"
 	if [ -f "$_ipsetsrc/COPYING" ]; then
@@ -409,6 +446,7 @@ build_spk() {
 	require_tool sed
 	require_tool gzip
 	require_tool md5sum
+	require_bundled_versions
 
 	PKG=$(sed -n 's/^package="\(.*\)"/\1/p' "$SRC/INFO")
 	VER=$(sed -n 's/^version="\(.*\)"/\1/p' "$SRC/INFO")
@@ -424,6 +462,14 @@ build_spk() {
 	# They land under /var/packages/IKEv2VPN/target/ on the installed system.
 	cp "$ROOT/LICENSE" "$STAGE/package/LICENSE"
 	cp "$ROOT/THIRD_PARTY_NOTICES.md" "$STAGE/package/THIRD_PARTY_NOTICES.md"
+	sed -i \
+		-e "s/@STRONGSWAN_VERSION@/$BUNDLED_STRONGSWAN_VERSION/g" \
+		-e "s/@IPSET_VERSION@/$BUNDLED_IPSET_VERSION/g" \
+		-e "s/@LIBMNL_VERSION@/$BUNDLED_LIBMNL_VERSION/g" \
+		"$STAGE/package/THIRD_PARTY_NOTICES.md"
+	if grep -qE '@(STRONGSWAN|IPSET|LIBMNL)_VERSION@' "$STAGE/package/THIRD_PARTY_NOTICES.md"; then
+		die "Third-party notice version placeholders were not fully replaced."
+	fi
 	mkdir -p "$STAGE/package/licenses"
 	cp "$ROOT"/licenses/*.txt "$STAGE/package/licenses/" 2>/dev/null || true
 

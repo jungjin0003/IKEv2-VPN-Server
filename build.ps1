@@ -5,11 +5,23 @@
 # full source build). It invokes build.sh in --spk-only mode via Git Bash.
 $ErrorActionPreference = "Stop"
 
-# require a prebuilt strongSwan (bundled under src/package/strongswan/)
+# require the prebuilt binaries and the versions recorded by the Linux build
 $charon = Join-Path $PSScriptRoot "src\package\strongswan\libexec\ipsec\charon"
 $swanctl = Join-Path $PSScriptRoot "src\package\strongswan\sbin\swanctl"
+$ipset = Join-Path $PSScriptRoot "src\package\ipset\ipset"
+$ssVersion = Join-Path $PSScriptRoot "src\package\strongswan\VERSION"
+$ipsetVersion = Join-Path $PSScriptRoot "src\package\ipset\VERSION"
 if (-not (Test-Path $charon) -or -not (Test-Path $swanctl)) {
-    Write-Error "Prebuilt strongSwan not found under src\package\strongswan\. Build it first on Linux with ./build.sh (or drop a strongswan-*-IKEv2VPN-static.tar.gz next to build.sh)."
+    Write-Error "Prebuilt strongSwan not found under src\package\strongswan\. Build it first on Linux with ./build.sh."
+}
+if (-not (Test-Path $ipset)) {
+    Write-Error "Prebuilt ipset not found under src\package\ipset\. Build it first on Linux with ./build.sh."
+}
+if (-not (Test-Path $ssVersion)) {
+    Write-Error "src\package\strongswan\VERSION not found. Rebuild strongSwan on Linux with ./build.sh --rebuild-strongswan."
+}
+if (-not (Test-Path $ipsetVersion)) {
+    Write-Error "src\package\ipset\VERSION not found. Rebuild ipset on Linux with ./build.sh --rebuild-ipset."
 }
 
 # regenerate icons if missing
