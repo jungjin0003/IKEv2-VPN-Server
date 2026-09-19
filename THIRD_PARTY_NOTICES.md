@@ -25,7 +25,7 @@ shipped inside the `.spk` (under `target/` and `licenses/`).
 
 ## 1. strongSwan (bundled — charon daemon and swanctl CLI)
 
-- **Version:** 6.0.7
+- **Version:** @STRONGSWAN_VERSION@
 - **Files:** `target/strongswan/libexec/ipsec/charon`,
   `target/strongswan/sbin/swanctl`, and the plugin config snippets under
   `target/strongswan/strongswan.d/charon/`.
@@ -36,13 +36,13 @@ shipped inside the `.spk` (under `target/` and `licenses/`).
 - **Copyright:** © the strongSwan project and contributors (see the source
   files for per-file copyright information).
 - **Upstream / source:** <https://www.strongswan.org/> ·
-  source tarball <https://download.strongswan.org/strongswan-6.0.7.tar.bz2> ·
-  git <https://github.com/strongswan/strongswan> (tag `6.0.7`).
+  source tarball <https://download.strongswan.org/strongswan-@STRONGSWAN_VERSION@.tar.bz2> ·
+  git <https://github.com/strongswan/strongswan> (tag `@STRONGSWAN_VERSION@`).
 
 ### Written offer for corresponding source (GPLv2 §3)
 
 The strongSwan binaries in this package are distributed in compiled form. The
-complete corresponding source code is the unmodified strongSwan 6.0.7 release
+complete corresponding source code is the unmodified strongSwan @STRONGSWAN_VERSION@ release
 available at the upstream URLs above. This package applies **no source
 modifications** to strongSwan — it only compiles it with a fixed set of
 configure options. The exact build recipe (download, configure flags, install
@@ -94,7 +94,7 @@ required notices:
 ---
 ## 4. ipset (bundled: the ipset command line tool)
 
-- **Version:** 6.38
+- **Version:** @IPSET_VERSION@
 - **Files:** `target/ipset/ipset`.
 - **License:** GPL-2.0-only. The verbatim license text is in
   [`licenses/ipset-LICENSE.txt`](licenses/ipset-LICENSE.txt); the GPLv2 body is
@@ -102,13 +102,13 @@ required notices:
 - **Copyright:** © Jozsef Kadlecsik and the Netfilter project (see the source
   files for per-file copyright information).
 - **Upstream / source:** <https://ipset.netfilter.org/> ·
-  source tarball <https://ipset.netfilter.org/ipset-6.38.tar.bz2> ·
+  source tarball <https://ipset.netfilter.org/ipset-@IPSET_VERSION@.tar.bz2> ·
   git <https://git.netfilter.org/ipset/>.
 
 ### Written offer for corresponding source (GPLv2 §3)
 
 The ipset binary in this package is distributed in compiled form. The complete
-corresponding source code is the unmodified ipset 6.38 release available at the
+corresponding source code is the unmodified ipset @IPSET_VERSION@ release available at the
 upstream URLs above. This package applies **no source modifications** to ipset;
 it only compiles it with a fixed set of configure options. The exact build
 recipe (download, configure flags, install layout) is the
@@ -120,7 +120,7 @@ maintainer will provide a copy of the corresponding source on request.
 
 ## 5. libmnl (bundled: statically linked into the ipset binary)
 
-- **Version:** 1.0.5
+- **Version:** @LIBMNL_VERSION@
 - **Files:** none of its own. libmnl is compiled as a static library and linked
   into `target/ipset/ipset`, so no `libmnl.so` ships with the package.
 - **License:** LGPL-2.1-or-later. The verbatim license text is in
@@ -128,14 +128,14 @@ maintainer will provide a copy of the corresponding source on request.
 - **Copyright:** © Pablo Neira Ayuso and the Netfilter project (see the source
   files for per-file copyright information).
 - **Upstream / source:** <https://netfilter.org/projects/libmnl/> ·
-  source tarball <https://www.netfilter.org/projects/libmnl/files/libmnl-1.0.5.tar.bz2> ·
+  source tarball <https://www.netfilter.org/projects/libmnl/files/libmnl-@LIBMNL_VERSION@.tar.bz2> ·
   git <https://git.netfilter.org/libmnl/>.
 
 ### Relinking the bundled ipset with a modified libmnl (LGPL-2.1 §6)
 
 Because libmnl is linked statically, the LGPL requires the means to relink the
 resulting work against a modified libmnl. The [`build.sh`](build.sh) script in
-this repository is that means: it downloads libmnl 1.0.5 and ipset 6.38,
+this repository is that means: it downloads libmnl @LIBMNL_VERSION@ and ipset @IPSET_VERSION@,
 builds libmnl into a private prefix, and links ipset against it. Pointing the
 libmnl stage at a modified source tree and rerunning the script produces an
 ipset binary linked against that version. The maintainer will provide the
