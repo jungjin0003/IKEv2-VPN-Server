@@ -451,6 +451,8 @@ build_spk() {
 	PKG=$(sed -n 's/^package="\(.*\)"/\1/p' "$SRC/INFO")
 	VER=$(sed -n 's/^version="\(.*\)"/\1/p' "$SRC/INFO")
 	[ -n "$PKG" ] && [ -n "$VER" ] || die "package/version not found in src/INFO"
+	SPK="$DIST/${PKG}-${VER}.spk"
+	[ ! -e "$SPK" ] || die "Refusing to overwrite existing SPK: $SPK"
 
 	log "Staging $PKG $VER"
 	rm -rf "$ROOT/build/stage"
@@ -522,7 +524,6 @@ build_spk() {
 		"$STAGE/conf/"* 2>/dev/null || true
 	chmod 755 "$STAGE/scripts/"*
 
-	SPK="$DIST/${PKG}-${VER}.spk"
 	log "Creating $(basename "$SPK")"
 	tar -cf "$SPK" \
 		--owner=0 --group=0 --numeric-owner \
