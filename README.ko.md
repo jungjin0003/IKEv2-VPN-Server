@@ -76,7 +76,7 @@ MSCHAPv2(ID/PW) 인증 방식을 이용해 DSM 사용자 계정을 통해 로그
 ```sh
 sudo apt-get update
 sudo apt-get install -y git build-essential curl ca-certificates bzip2 \
-                        file pkg-config libgmp-dev python3
+                        file pkg-config libgmp-dev python3 perl
 ```
 
 ### 빌드
@@ -92,10 +92,10 @@ cd IKEv2-VPN-Server
 ## 라이선스
 
 이 패키지는 **GPL-2.0-or-later**로 배포됩니다 ([`LICENSE`](LICENSE)).
-strongSwan(GPL-2.0-or-later, OpenSSL 링크 예외)의 `charon`/`swanctl`
-바이너리와 관리 UI가 사용하는 Preact + htm 번들(MIT / Apache-2.0)을 번들하며,
-GMP(LGPL/GPL)는 번들 없이 동적 링크만 합니다. 패키지에 포함되는
-[`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)는 빌드에서 기록한 버전으로 생성되며
-소스 제공 서면 오퍼도 포함합니다.
+strongSwan(GPL-2.0-or-later, OpenSSL 링크 예외)의 `charon`/`swanctl` 바이너리,
+EC 암호화를 위해 정적 링크한 OpenSSL(Apache-2.0), 관리 UI가 사용하는
+Preact + htm 번들(MIT / Apache-2.0)을 포함합니다. GMP(LGPL/GPL)는 번들 없이
+동적 링크만 합니다. 패키지에 포함되는 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)는
+빌드에서 기록한 버전으로 생성되며 소스 제공 서면 오퍼도 포함합니다.
 
 - Copyright (C) 2026 jungjin0003 (CrazyHacker)
