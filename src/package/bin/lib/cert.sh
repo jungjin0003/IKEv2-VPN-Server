@@ -69,7 +69,44 @@ dsm_cert_desc() {
         | sed -n 's/.*"desc"[^"]*"\([^"]*\)".*/\1/p' | head -n 1
 }
 
-# list installable DSM certificates as "id|label" (label = desc, else CN)
+dsm_cert_key_type() {
+    _algo=$(openssl x509 -in "$1" -noout -text 2>/dev/null \
+        | sed -n 's/^[[:space:]]*Public Key Algorithm: //p' | head -n 1)
+    case "$_algo" in
+        rsaEncryption) printf '%s\n' rsa ;;
+        id-ecPublicKey) printf '%s\n' ecdsa ;;
+        *) printf '%s\n' unsupported ;;
+    esac
+}
+
+dsm_cert_key_matches() {
+    _cert_pub=$(openssl x509 -in "$1" -pubkey -noout 2>/dev/null \
+        | openssl pkey -pubin -outform DER 2>/dev/null \
+        | openssl dgst -sha256 2>/dev/null | sed 's/^.*= //')
+    _key_pub=$(openssl pkey -in "$2" -pubout -outform DER 2>/dev/null \
+        | openssl dgst -sha256 2>/dev/null | sed 's/^.*= //')
+    [ -n "$_cert_pub" ] && [ "$_cert_pub" = "$_key_pub" ]
+}
+
+validate_server_cert_source() {
+    _src="$1"
+    _type=$(dsm_cert_key_type "${_src}/cert.pem")
+    case "$_type" in
+        rsa|ecdsa) ;;
+        *) fail "unsupported server certificate key type in ${_src}/cert.pem" ;;
+    esac
+    openssl pkey -in "${_src}/privkey.pem" -noout >/dev/null 2>&1 \
+        || fail "server certificate private key could not be read"
+    dsm_cert_key_matches "${_src}/cert.pem" "${_src}/privkey.pem" \
+        || fail "server certificate and private key do not match"
+}
+
+cert_check_server() {
+    _src=$(dsm_cert_src "$1") || return 0
+    validate_server_cert_source "$_src"
+}
+
+# list installable DSM certificates as "id|label|key type" (label = desc, else CN)
 dsm_cert_list() {
     [ -d "$SYNO_CERT_ARCHIVE" ] || return 0
     for d in "$SYNO_CERT_ARCHIVE"/*/; do
@@ -79,7 +116,7 @@ dsm_cert_list() {
         _lbl=$(dsm_cert_desc "$_cid")
         [ -n "$_lbl" ] || _lbl=$(cert_cn "${d}cert.pem")
         [ -n "$_lbl" ] || _lbl="$_cid"
-        printf '%s|%s\n' "$_cid" "$_lbl"
+        printf '%s|%s|%s\n' "$_cid" "$_lbl" "$(dsm_cert_key_type "${d}cert.pem")"
     done
 }
 
@@ -153,6 +190,7 @@ install_server_cert() {
 
     _src=$(dsm_cert_src "$_cid") || _src=""
     if [ -n "$_src" ]; then
+        validate_server_cert_source "$_src"
         # Keep the leaf separate from all issuing authorities. DSM commonly
         # stores a leaf-only cert.pem, but some stores put the full chain in it.
         # A file no certificate can be read out of is taken as it stands rather

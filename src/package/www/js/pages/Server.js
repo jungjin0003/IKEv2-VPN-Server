@@ -38,7 +38,15 @@ function certOptions(certs, effective) {
     if (certs === null) return [];
     if (!certs.length) return [{ value: "", label: t("cert_none") }];
     const opts = certs.map(function (c) {
-        return { value: c.id, label: c.label || c.id };
+        let suffix = "";
+        if (c.keyType === "rsa") suffix = " (RSA)";
+        else if (c.keyType === "ecdsa") suffix = " (ECDSA)";
+        else suffix = " " + t("cert_key_unsupported");
+        return {
+            value: c.id,
+            label: (c.label || c.id) + suffix,
+            disabled: c.keyType !== "rsa" && c.keyType !== "ecdsa"
+        };
     });
     if (effective && !certs.some(function (c) { return c.id === effective; })) {
         opts.push({ value: effective, label: effective + " " + t("cert_missing") });
@@ -182,6 +190,13 @@ export function Server({ page, state, onGo, onRefresh }) {
         if (form.ip1 === "" || form.ip2 === "" || form.ip3 === "") {
             toast(t("subnet_incomplete"));
             return;
+        }
+        if (def.cert && certs) {
+            const selectedCert = certs.filter(function (c) { return c.id === form.cert; })[0];
+            if (selectedCert && selectedCert.keyType !== "rsa" && selectedCert.keyType !== "ecdsa") {
+                toast(t("cert_key_unsupported_error"));
+                return;
+            }
         }
         const params = {
             action: "save", scope: page,

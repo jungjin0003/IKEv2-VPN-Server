@@ -36,6 +36,7 @@ select:focus,input:focus{border-color:var(--accent)!important;outline:none}
     box-shadow:0 6px 20px rgba(0,0,0,.16);padding:4px;z-index:9999;max-height:280px;overflow-y:auto}
 .dd-opt{padding:8px 12px;border-radius:4px;cursor:pointer;font-size:13px;white-space:nowrap;color:#333}
 .dd-opt:hover{background:var(--accent-bg);color:var(--accent)}
+.dd-opt.disabled{color:#a2a8ad;cursor:default;background:#fff}
 .dd-opt.sel{background:var(--accent-bg);color:var(--accent);font-weight:600}
 .form-row .dd{max-width:320px}
 ::-webkit-scrollbar{width:10px;height:10px}

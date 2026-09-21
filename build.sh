@@ -3,9 +3,10 @@
 # Unified build script for the IKEv2VPN Synology package (.spk).
 #
 # It performs three stages, in order:
-#   1. (optional) Build the bundled static strongSwan from source and place
-#      the minimal runtime files (charon, swanctl, strongswan.d/charon/*.conf)
-#      into src/package/strongswan/.
+#   1. (optional) Build OpenSSL as a private static dependency, then build the
+#      bundled static strongSwan with its OpenSSL plugin and place the minimal
+#      runtime files (charon, swanctl, strongswan.d/charon/*.conf) into
+#      src/package/strongswan/.
 #   2. (optional) Build the bundled ipset userspace tool from source and place
 #      the single binary into src/package/ipset/.
 #   3. Assemble the DSM .spk from src/ into dist/.
@@ -15,8 +16,9 @@
 # force a fresh build from source.
 #
 # strongSwan is built --disable-shared --enable-static --enable-monolithic
-# (no plugin .so files - everything baked into charon/swanctl) and links
-# libgmp dynamically against the build machine's system libgmp.
+# (no plugin .so files: everything is baked into charon/swanctl). OpenSSL is
+# built privately and linked statically, while libgmp remains dynamically linked
+# against the build machine's system libgmp.
 #
 # ipset needs libmnl, which DSM does not carry either. libmnl is built static
 # into a private prefix and linked in, and ipset's own libipset is static as
@@ -47,6 +49,8 @@ cd "$ROOT"
 
 # ---------------------------------------------------------------- arguments
 SS_VERSION="latest"
+# Resolved from the latest OpenSSL GitHub release when rebuilding.
+OPENSSL_VERSION="latest"
 IPSET_VERSION="6.38"
 SPK_ONLY=false
 REBUILD_SS=false
@@ -78,6 +82,7 @@ SS_DIR="$SRC/package/strongswan"                 # bundled strongSwan (SPK sourc
 SS_CHARON="$SS_DIR/libexec/ipsec/charon"
 SS_SWANCTL="$SS_DIR/sbin/swanctl"
 SS_CONFDIR="$SS_DIR/strongswan.d/charon"
+SS_OPENSSL_VERSION="$SS_DIR/OPENSSL_VERSION"
 
 STAGE="$ROOT/build/stage"                        # .spk staging area
 DIST="$ROOT/dist"
@@ -88,6 +93,7 @@ SS_SYSCONFDIR=/var/packages/IKEv2VPN/etc
 SS_SWANCTLDIR=/var/packages/IKEv2VPN/etc/swanctl
 SS_PIDDIR=/var/packages/IKEv2VPN/var
 SS_STAGE="$ROOT/build/strongswan-stage"          # DESTDIR for 'make install'
+OPENSSL_PREFIX="$ROOT/build/openssl-install"      # private static libcrypto
 
 IPSET_DIR="$SRC/package/ipset"                   # bundled ipset (SPK source of truth)
 IPSET_BIN="$IPSET_DIR/ipset"
@@ -114,23 +120,30 @@ version_field() {
 
 # load the versions the build stages recorded next to what they produced
 require_bundled_versions() {
+	[ -s "$SS_OPENSSL_VERSION" ] \
+		|| die "$SS_OPENSSL_VERSION not found. Rebuild strongSwan on Linux with: ./build.sh --rebuild-strongswan"
 	[ -f "$SS_VERSION_FILE" ] \
 		|| die "$SS_VERSION_FILE not found. Rebuild strongSwan on Linux with: ./build.sh --rebuild-strongswan"
 	[ -f "$IPSET_VERSION_FILE" ] \
 		|| die "$IPSET_VERSION_FILE not found. Rebuild ipset on Linux with: ./build.sh --rebuild-ipset"
 
 	BUNDLED_STRONGSWAN_VERSION="$(sed -n '1p' "$SS_VERSION_FILE")"
+	BUNDLED_OPENSSL_VERSION="$(sed -n '1p' "$SS_OPENSSL_VERSION")"
 	BUNDLED_IPSET_VERSION="$(version_field "$IPSET_VERSION_FILE" ipset)"
 	BUNDLED_LIBMNL_VERSION="$(version_field "$IPSET_VERSION_FILE" libmnl)"
 
 	[ -n "$BUNDLED_STRONGSWAN_VERSION" ] || die "$SS_VERSION_FILE is empty"
+	[ -n "$BUNDLED_OPENSSL_VERSION" ] || die "$SS_OPENSSL_VERSION is empty"
 	[ -n "$BUNDLED_IPSET_VERSION" ] || die "ipset= is missing from $IPSET_VERSION_FILE"
 	[ -n "$BUNDLED_LIBMNL_VERSION" ] || die "libmnl= is missing from $IPSET_VERSION_FILE"
 }
 
 # true when the minimal runtime files are already present under src/
 have_strongswan() {
-	[ -f "$SS_CHARON" ] && [ -f "$SS_SWANCTL" ] && ls "$SS_CONFDIR"/*.conf >/dev/null 2>&1
+	[ -f "$SS_CHARON" ] && [ -f "$SS_SWANCTL" ] \
+		&& [ -s "$SS_OPENSSL_VERSION" ] \
+		&& [ -f "$ROOT/licenses/openssl-LICENSE.txt" ] \
+		&& ls "$SS_CONFDIR"/*.conf >/dev/null 2>&1
 }
 # true when the bundled ipset binary is already present under src/
 have_ipset() {
@@ -139,9 +152,11 @@ have_ipset() {
 # remove only artifacts created while obtaining/building bundled strongSwan
 clean_strongswan() {
 	log "Removing downloaded and built strongSwan artifacts"
-	rm -rf "$SS_DIR" "$SS_STAGE" "$ROOT/build/strongswan-src.tar.bz2"
+	rm -rf "$SS_DIR" "$SS_STAGE" "$OPENSSL_PREFIX" \
+		"$ROOT/build/strongswan-src.tar.bz2" "$ROOT/build/openssl-src.tar.gz"
 	if [ -d "$ROOT/build" ]; then
-		find "$ROOT/build" -mindepth 1 -maxdepth 1 -type d -name 'strongswan-*' -exec rm -rf {} +
+		find "$ROOT/build" -mindepth 1 -maxdepth 1 -type d \
+			\( -name 'strongswan-*' -o -name 'openssl-*' \) -exec rm -rf {} +
 	fi
 }
 # remove only artifacts created while obtaining/building bundled ipset
@@ -155,6 +170,66 @@ clean_ipset() {
 	fi
 }
 # --------------------------------------------------- stage 1: strongSwan
+# Resolve the current stable OpenSSL release from the upstream release API.
+resolve_openssl_version() {
+	require_tool curl
+	[ "$OPENSSL_VERSION" != "latest" ] && return 0
+	_openssl_release="$(curl -fsSL --retry 3 https://api.github.com/repos/openssl/openssl/releases/latest)"
+	OPENSSL_VERSION="$(printf '%s\n' "$_openssl_release" \
+		| sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"openssl-\([^"]*\)".*/\1/p' \
+		| sed -n '1p')"
+	[ -n "$OPENSSL_VERSION" ] \
+		|| die "Could not determine the latest OpenSSL release from GitHub."
+}
+build_openssl() {
+	resolve_openssl_version
+	require_tool gcc
+	require_tool make
+	require_tool curl
+	require_tool tar
+	require_tool perl
+
+	_openssl_tar="openssl-${OPENSSL_VERSION}.tar.gz"
+	_openssl_url="https://github.com/openssl/openssl/releases/download/openssl-${OPENSSL_VERSION}/${_openssl_tar}"
+	_openssl_dl="$ROOT/build/openssl-src.tar.gz"
+	mkdir -p "$ROOT/build"
+
+	log "Downloading OpenSSL source ($_openssl_url)"
+	curl -fL --retry 3 -o "$_openssl_dl" "$_openssl_url"
+	_listing="$(tar tzf "$_openssl_dl")"
+	_first="${_listing%%$'\n'*}"
+	_openssl_dir="${_first%%/*}"
+	_openssl_src="$ROOT/build/$_openssl_dir"
+
+	log "Extracting OpenSSL ($_openssl_dir)"
+	rm -rf "$_openssl_src" "$OPENSSL_PREFIX"
+	tar xzf "$_openssl_dl" -C "$ROOT/build"
+	rm -f "$_openssl_dl"
+
+	OPENSSL_CFLAGS="${CFLAGS:-} -march=x86-64 -O2 -fPIC"
+	log "Configuring OpenSSL (static libcrypto only)"
+	(
+		cd "$_openssl_src"
+		CFLAGS="$OPENSSL_CFLAGS" ./Configure linux-x86_64 \
+			--prefix="$OPENSSL_PREFIX" \
+			--libdir=lib \
+			no-shared no-module no-apps no-tests no-docs
+		make -j1
+		make install_sw -j1
+	)
+
+	[ -f "$OPENSSL_PREFIX/lib/libcrypto.a" ] \
+		|| die "OpenSSL did not produce $OPENSSL_PREFIX/lib/libcrypto.a"
+	if find "$OPENSSL_PREFIX" -name '*.so*' | grep -q .; then
+		find "$OPENSSL_PREFIX" -name '*.so*' >&2
+		die "OpenSSL produced shared libraries despite no-shared."
+	fi
+	if [ -f "$_openssl_src/LICENSE.txt" ]; then
+		mkdir -p "$ROOT/licenses"
+		cp -p "$_openssl_src/LICENSE.txt" "$ROOT/licenses/openssl-LICENSE.txt"
+	fi
+}
+
 build_strongswan() {
 	$SPK_ONLY && die "No prebuilt strongSwan available and --spk-only was given. Build strongSwan first on Linux with: ./build.sh"
 
@@ -169,6 +244,7 @@ build_strongswan() {
 	if [ ! -f /usr/include/gmp.h ] && [ ! -f /usr/include/x86_64-linux-gnu/gmp.h ]; then
 		die "libgmp-dev (gmp.h) not found. Install it, e.g. 'sudo apt-get install libgmp-dev'."
 	fi
+	build_openssl
 
 	if [ "$SS_VERSION" = "latest" ]; then
 		_srctar="strongswan.tar.bz2"
@@ -202,7 +278,11 @@ build_strongswan() {
 	(
 		cd "$_srcdir"
 		make distclean >/dev/null 2>&1 || true
-		CFLAGS="$SS_CFLAGS" ./configure \
+		CPPFLAGS="-I$OPENSSL_PREFIX/include ${CPPFLAGS:-}" \
+		CFLAGS="$SS_CFLAGS" \
+		LDFLAGS="-L$OPENSSL_PREFIX/lib ${LDFLAGS:-}" \
+		LIBS="-ldl -pthread ${LIBS:-}" \
+		./configure \
 			--prefix="$SS_PREFIX" \
 			--sysconfdir="$SS_SYSCONFDIR" \
 			--with-swanctldir="$SS_SWANCTLDIR" \
@@ -210,7 +290,7 @@ build_strongswan() {
 			--disable-shared --enable-static --enable-monolithic \
 			--enable-charon \
 			--enable-ikev2 --disable-ikev1 \
-			--enable-gmp --enable-random --enable-nonce --enable-hmac \
+			--enable-gmp --enable-openssl --enable-random --enable-nonce --enable-hmac \
 			--enable-sha1 --enable-sha2 --enable-md5 --enable-md4 --enable-fips-prf \
 			--enable-aes --enable-des --enable-gcm \
 			--enable-x509 --enable-pubkey --enable-pkcs1 --enable-pkcs8 --enable-pem \
@@ -232,7 +312,7 @@ build_strongswan() {
 	_swanctl="$SS_STAGE$SS_PREFIX/sbin/swanctl"
 	_confdir="$SS_STAGE$SS_SYSCONFDIR/strongswan.d/charon"
 
-	log "Verifying build (monolithic, libgmp linkage)"
+	log "Verifying build (monolithic, static OpenSSL, libgmp linkage)"
 	if find "$SS_STAGE$SS_PREFIX" -name '*.so*' | grep -q .; then
 		find "$SS_STAGE$SS_PREFIX" -name '*.so*' >&2
 		die "strongSwan plugins were built as separate .so files (not monolithic)."
@@ -240,11 +320,16 @@ build_strongswan() {
 	for _b in "$_charon" "$_swanctl"; do
 		file "$_b"
 		ldd "$_b" | grep -q "libgmp.so" || die "$_b is not dynamically linked against libgmp.so."
+		if ldd "$_b" | grep -qE 'libcrypto|libssl'; then
+			ldd "$_b" >&2
+			die "$_b dynamically links OpenSSL instead of using the private static build."
+		fi
 		if ldd "$_b" | grep -qi "not found"; then
 			ldd "$_b" >&2
 			die "$_b has unresolved shared libraries."
 		fi
 	done
+	[ -f "$_confdir/openssl.conf" ] || die "The strongSwan OpenSSL plugin config was not installed."
 
 	log "Stripping binaries"
 	strip "$_charon" "$_swanctl"
@@ -255,6 +340,7 @@ build_strongswan() {
 	cp -p "$_charon" "$SS_CHARON"
 	cp -p "$_swanctl" "$SS_SWANCTL"
 	cp -p "$_confdir"/*.conf "$SS_CONFDIR/"
+	printf '%s\n' "$OPENSSL_VERSION" > "$SS_OPENSSL_VERSION"
 
 	# charon carries no version marker that survives stripping, so the
 	# version the source tarball named is recorded next to the binaries
@@ -466,10 +552,11 @@ build_spk() {
 	cp "$ROOT/THIRD_PARTY_NOTICES.md" "$STAGE/package/THIRD_PARTY_NOTICES.md"
 	sed -i \
 		-e "s/@STRONGSWAN_VERSION@/$BUNDLED_STRONGSWAN_VERSION/g" \
+		-e "s/@OPENSSL_VERSION@/$BUNDLED_OPENSSL_VERSION/g" \
 		-e "s/@IPSET_VERSION@/$BUNDLED_IPSET_VERSION/g" \
 		-e "s/@LIBMNL_VERSION@/$BUNDLED_LIBMNL_VERSION/g" \
 		"$STAGE/package/THIRD_PARTY_NOTICES.md"
-	if grep -qE '@(STRONGSWAN|IPSET|LIBMNL)_VERSION@' "$STAGE/package/THIRD_PARTY_NOTICES.md"; then
+	if grep -qE '@(STRONGSWAN|OPENSSL|IPSET|LIBMNL)_VERSION@' "$STAGE/package/THIRD_PARTY_NOTICES.md"; then
 		die "Third-party notice version placeholders were not fully replaced."
 	fi
 	mkdir -p "$STAGE/package/licenses"

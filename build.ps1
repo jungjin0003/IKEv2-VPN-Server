@@ -10,6 +10,7 @@ $charon = Join-Path $PSScriptRoot "src\package\strongswan\libexec\ipsec\charon"
 $swanctl = Join-Path $PSScriptRoot "src\package\strongswan\sbin\swanctl"
 $ipset = Join-Path $PSScriptRoot "src\package\ipset\ipset"
 $ssVersion = Join-Path $PSScriptRoot "src\package\strongswan\VERSION"
+$ssOpenSSLVersion = Join-Path $PSScriptRoot "src\package\strongswan\OPENSSL_VERSION"
 $ipsetVersion = Join-Path $PSScriptRoot "src\package\ipset\VERSION"
 if (-not (Test-Path $charon) -or -not (Test-Path $swanctl)) {
     Write-Error "Prebuilt strongSwan not found under src\package\strongswan\. Build it first on Linux with ./build.sh."
@@ -19,6 +20,9 @@ if (-not (Test-Path $ipset)) {
 }
 if (-not (Test-Path $ssVersion)) {
     Write-Error "src\package\strongswan\VERSION not found. Rebuild strongSwan on Linux with ./build.sh --rebuild-strongswan."
+}
+if (-not (Test-Path $ssOpenSSLVersion)) {
+    Write-Error "src\package\strongswan\OPENSSL_VERSION not found. Rebuild strongSwan on Linux with ./build.sh --rebuild-strongswan."
 }
 if (-not (Test-Path $ipsetVersion)) {
     Write-Error "src\package\ipset\VERSION not found. Rebuild ipset on Linux with ./build.sh --rebuild-ipset."
