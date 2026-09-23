@@ -87,8 +87,8 @@ required notices:
 - **Upstream / source:** <https://www.openssl.org/> · source tarball
   <https://github.com/openssl/openssl/releases/download/openssl-@OPENSSL_VERSION@/openssl-@OPENSSL_VERSION@.tar.gz>
   · git <https://github.com/openssl/openssl> (tag `openssl-@OPENSSL_VERSION@`).
-- **Modifications:** none. The build uses `no-shared` and `no-module`, then links
-  the resulting static cryptography library into strongSwan.
+- **Modifications:** none. The build uses `no-shared`, `no-module` and `no-dso`,
+  then links the resulting static cryptography library into strongSwan.
 
 ---
 
