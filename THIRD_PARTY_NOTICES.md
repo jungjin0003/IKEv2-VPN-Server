@@ -75,7 +75,24 @@ required notices:
 
 ---
 
-## 3. Preact + htm (bundled — management UI)
+## 3. OpenSSL (bundled: statically linked into strongSwan)
+
+- **Version:** @OPENSSL_VERSION@
+- **Files:** none of its own. `libcrypto.a` is linked into the bundled `charon`
+  and `swanctl` binaries, so no OpenSSL shared library ships with the package.
+- **License:** Apache-2.0. The verbatim license text is in
+  [`licenses/openssl-LICENSE.txt`](licenses/openssl-LICENSE.txt).
+- **Copyright:** Copyright © 1998-2026 The OpenSSL Project Authors and other
+  contributors listed in the source distribution.
+- **Upstream / source:** <https://www.openssl.org/> · source tarball
+  <https://github.com/openssl/openssl/releases/download/openssl-@OPENSSL_VERSION@/openssl-@OPENSSL_VERSION@.tar.gz>
+  · git <https://github.com/openssl/openssl> (tag `openssl-@OPENSSL_VERSION@`).
+- **Modifications:** none. The build uses `no-shared`, `no-module` and `no-dso`,
+  then links the resulting static cryptography library into strongSwan.
+
+---
+
+## 4. Preact + htm (bundled: management UI)
 
 - **Version:** the `htm/preact/standalone` build from htm 3.1.1, which bundles
   Preact, its hooks and htm's tagged-template renderer into one ES module.
@@ -92,7 +109,7 @@ required notices:
   so the package needs no build tooling and loads nothing from the network.
 
 ---
-## 4. ipset (bundled: the ipset command line tool)
+## 5. ipset (bundled: the ipset command line tool)
 
 - **Version:** @IPSET_VERSION@
 - **Files:** `target/ipset/ipset`.
@@ -118,7 +135,7 @@ maintainer will provide a copy of the corresponding source on request.
 
 ---
 
-## 5. libmnl (bundled: statically linked into the ipset binary)
+## 6. libmnl (bundled: statically linked into the ipset binary)
 
 - **Version:** @LIBMNL_VERSION@
 - **Files:** none of its own. libmnl is compiled as a static library and linked

@@ -26,7 +26,7 @@
 #        ikev2ctl notify-release <version>
 #        ikev2ctl notify-register | notify-unregister
 #        ikev2ctl cert-issue <name> <p12pass> <outfile>
-#        ikev2ctl cert-list | cert-del <name>
+#        ikev2ctl cert-list | cert-del <name> | cert-check-server <cert-id>
 
 LIB_DIR="$(dirname "$0")/lib"
 
@@ -57,8 +57,9 @@ case "$1" in
     cert-issue)  cert_issue "$2" "$3" "$4" ;;
     cert-list)   cert_list ;;
     cert-del)    cert_del "$2" ;;
+    cert-check-server) cert_check_server "$2" ;;
     *)
-        echo "usage: $0 apply|remove|reload|status|dsm-users|clients|disconnect|log-dump|notify-release|notify-register|notify-unregister|cert-issue|cert-list|cert-del" >&2
+        echo "usage: $0 apply|remove|reload|status|dsm-users|dsm-certs|clients|disconnect|log-dump|notify-release|notify-register|notify-unregister|cert-issue|cert-list|cert-del|cert-check-server" >&2
         exit 1
         ;;
 esac

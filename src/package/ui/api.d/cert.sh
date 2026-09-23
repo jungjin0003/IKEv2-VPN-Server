@@ -32,15 +32,16 @@ do_certdel() {
     json_ok
 }
 
-# DSM certificates available for a VPN server to present ([{id,label}])
+# DSM certificates available for a VPN server to present ([{id,label,keyType}])
 do_dsmcerts() {
     json_headers
     printf '['
     FIRST=1
-    "$AS" ikev2ctl dsm-certs 2>/dev/null | while IFS='|' read -r CID LBL; do
+    "$AS" ikev2ctl dsm-certs 2>/dev/null | while IFS='|' read -r CID LBL KEY_TYPE; do
         [ -n "$CID" ] || continue
         [ $FIRST -eq 1 ] || printf ','
-        printf '{"id":"%s","label":"%s"}' "$(json_str "$CID")" "$(json_str "$LBL")"
+        printf '{"id":"%s","label":"%s","keyType":"%s"}' \
+            "$(json_str "$CID")" "$(json_str "$LBL")" "$(json_str "$KEY_TYPE")"
         FIRST=0
     done
     printf ']'

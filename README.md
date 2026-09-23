@@ -73,7 +73,7 @@ Logging in with DSM user accounts over MSCHAPv2 (username/password) requires the
 ```sh
 sudo apt-get update
 sudo apt-get install -y git build-essential curl ca-certificates bzip2 \
-                        file pkg-config libgmp-dev python3
+                        file pkg-config libgmp-dev python3 perl
 ```
 
 ### Build
@@ -88,6 +88,6 @@ cd IKEv2-VPN-Server
 
 ## License
 
-This package is distributed under **GPL-2.0-or-later** ([`LICENSE`](LICENSE)). It bundles the `charon`/`swanctl` binaries of strongSwan (GPL-2.0-or-later, with the OpenSSL linking exception) and, for the management UI, the Preact + htm bundle (MIT / Apache-2.0); GMP (LGPL/GPL) is only dynamically linked, not bundled. The packaged [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) is generated with the versions recorded by the component build and contains the written offer for corresponding source.
+This package is distributed under **GPL-2.0-or-later** ([`LICENSE`](LICENSE)). It bundles the `charon`/`swanctl` binaries of strongSwan (GPL-2.0-or-later, with the OpenSSL linking exception), statically links OpenSSL (Apache-2.0) for EC cryptography, and bundles the Preact + htm management UI (MIT / Apache-2.0). GMP (LGPL/GPL) is only dynamically linked, not bundled. The packaged [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) is generated with the versions recorded by the component build and contains the written offer for corresponding source.
 
 - Copyright (C) 2026 jungjin0003 (CrazyHacker)

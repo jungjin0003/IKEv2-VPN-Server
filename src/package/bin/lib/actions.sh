@@ -183,15 +183,20 @@ do_status() {
 
     # plugin availability - our own bundled charon build (fixed feature
     # set, compiled with eap-identity/eap-mschapv2/eap-radius/eap-tls)
+    LOADED=""
     if charon_running; then
-        LOADED=$(swanctl --list-plugins 2>/dev/null)
+        LOADED=$(swanctl --stats 2>/dev/null | sed -n 's/^ *loaded plugins: //p')
+    fi
+    if [ -n "$LOADED" ]; then
         printf '%s' "$LOADED" | grep -qw "eap-tls"      && echo "plugin_eap_tls=yes"      || echo "plugin_eap_tls=no"
         printf '%s' "$LOADED" | grep -qw "eap-radius"    && echo "plugin_eap_radius=yes"    || echo "plugin_eap_radius=no"
         printf '%s' "$LOADED" | grep -qw "eap-mschapv2"  && echo "plugin_eap_mschapv2=yes"  || echo "plugin_eap_mschapv2=no"
+        printf '%s' "$LOADED" | grep -qw "openssl"       && echo "plugin_openssl=yes"       || echo "plugin_openssl=no"
     else
         echo "plugin_eap_tls=unknown"
         echo "plugin_eap_radius=unknown"
         echo "plugin_eap_mschapv2=unknown"
+        echo "plugin_openssl=unknown"
     fi
 
     CERTS=0

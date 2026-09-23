@@ -6,7 +6,7 @@
 // measured and placed after every open, and flips above the box when there is
 // not enough room below.
 //
-// props: value, options ([{value,label}]), onChange(value), disabled, width
+// props: value, options ([{value,label,disabled}]), onChange(value), disabled, width
 
 import { html, useState, useRef, useEffect, useLayoutEffect } from "../preact.js";
 import { IconChevron } from "./Icons.js";
@@ -73,9 +73,9 @@ export function Dropdown({ value, options, onChange, disabled, width }) {
                 <div class="dd-pop" ref=${popRef}>
                     ${opts.map(function (o) {
                         return html`
-                            <div class=${"dd-opt" + (o.value === value ? " sel" : "")}
+                            <div class=${"dd-opt" + (o.value === value ? " sel" : "") + (o.disabled ? " disabled" : "")}
                                  onClick=${function () {
-                                     if (o.value !== value) onChange(o.value);
+                                     if (!o.disabled && o.value !== value) onChange(o.value);
                                      setOpen(false);
                                  }}>${o.label}</div>`;
                     })}

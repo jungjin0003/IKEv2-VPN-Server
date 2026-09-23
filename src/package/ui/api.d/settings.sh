@@ -12,6 +12,9 @@ valid_ip()   { printf '%s' "$1" | grep -Eq '^[0-9]{1,3}(\.[0-9]{1,3}){3}$'; }
 valid_subnet24() { printf '%s' "$1" | grep -Eq '^[0-9]{1,3}(\.[0-9]{1,3}){2}\.0/24$'; }
 # DSM certificate archive id (empty = system default)
 valid_certid() { printf '%s' "$1" | grep -Eq '^[A-Za-z0-9._-]{0,40}$'; }
+validate_server_cert() {
+    CERT_ERR=$("$AS" ikev2ctl cert-check-server "$1" 2>&1) || json_err "${CERT_ERR#ERROR: }"
+}
 # Pre-shared key. The value is written into three different kinds of document,
 # so it is held to what is safe in all of them: printable ASCII without space,
 # which leaves out the CR and LF that would break settings.conf's KEY="value"
@@ -106,6 +109,7 @@ do_save() {
         SUBNET=$(param subnet); resolve_dns; CERT=$(param cert)
         valid_subnet24 "$SUBNET" || json_err "invalid IP range (expected x.x.x.0/24)"
         valid_certid "$CERT" || json_err "invalid certificate id"
+        validate_server_cert "$CERT"
         IKEV2_ENABLE_MSCHAPV2="$EN"
         IKEV2_SUBNET_MSCHAPV2="$SUBNET"; IKEV2_DNS_MSCHAPV2="$DNS"; IKEV2_CERT_MSCHAPV2="$CERT"
         ;;
@@ -132,6 +136,7 @@ do_save() {
         SUBNET=$(param subnet); resolve_dns; CERT=$(param cert)
         valid_subnet24 "$SUBNET" || json_err "invalid IP range (expected x.x.x.0/24)"
         valid_certid "$CERT" || json_err "invalid certificate id"
+        validate_server_cert "$CERT"
         IKEV2_ENABLE_RSA="$EN"; IKEV2_SUBNET_RSA="$SUBNET"; IKEV2_DNS_RSA="$DNS"; IKEV2_CERT_RSA="$CERT"
         ;;
     eaptls)
@@ -139,6 +144,7 @@ do_save() {
         SUBNET=$(param subnet); resolve_dns; CERT=$(param cert)
         valid_subnet24 "$SUBNET" || json_err "invalid IP range (expected x.x.x.0/24)"
         valid_certid "$CERT" || json_err "invalid certificate id"
+        validate_server_cert "$CERT"
         IKEV2_ENABLE_EAPTLS="$EN"; IKEV2_SUBNET_EAPTLS="$SUBNET"; IKEV2_DNS_EAPTLS="$DNS"; IKEV2_CERT_EAPTLS="$CERT"
         ;;
     *)

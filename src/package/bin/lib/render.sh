@@ -1,19 +1,14 @@
 # render.sh - generate the two strongSwan config files from the settings.
 
-# cipher proposals for the current IKEV2_ENC setting.
-# - ecp* (EC curve DH groups) deliberately excluded: the bundled build was
-#   not compiled with --enable-ecp, so charon has no such group registered
-#   and rejects the whole proposal ("invalid value for: proposals") if one
-#   is listed - modp groups (via --enable-gmp, which is compiled in) only.
-# - 3des deliberately excluded too: obsolete, and would need a separate
-#   --enable-des plugin the bundled build doesn't have either. Every
-#   client we care about (Windows/iOS/macOS/Android/strongSwan) supports
-#   AES, so there is no real fallback need for it.
+# cipher proposals for the current IKEV2_ENC setting. The bundled OpenSSL
+# plugin provides ECP groups for clients that support them. Existing MODP
+# proposals stay as fallbacks for older built-in clients.
+# 3DES is deliberately excluded because every supported client provides AES.
 cipher_ike() {
     case "$IKEV2_ENC" in
-        aes256) echo "aes256-sha256-modp2048,aes256-sha1-modp2048" ;;
-        aes128) echo "aes128-sha256-modp2048,aes128-sha1-modp1024" ;;
-        *)      echo "aes256-sha256-modp2048,aes256-sha1-modp2048,aes256-sha1-modp1024,aes128-sha1-modp1024" ;;
+        aes256) echo "aes256-sha256-ecp384,aes256-sha256-ecp256,aes256-sha256-modp2048,aes256-sha1-modp2048" ;;
+        aes128) echo "aes128-sha256-ecp384,aes128-sha256-ecp256,aes128-sha256-modp2048,aes128-sha1-modp1024" ;;
+        *)      echo "aes256-sha256-ecp384,aes256-sha256-ecp256,aes256-sha256-modp2048,aes256-sha1-modp2048,aes256-sha1-modp1024,aes128-sha256-ecp256,aes128-sha1-modp1024" ;;
     esac
 }
 
