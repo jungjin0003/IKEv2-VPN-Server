@@ -82,7 +82,6 @@ SS_DIR="$SRC/package/strongswan"                 # bundled strongSwan (SPK sourc
 SS_CHARON="$SS_DIR/libexec/ipsec/charon"
 SS_SWANCTL="$SS_DIR/sbin/swanctl"
 SS_CONFDIR="$SS_DIR/strongswan.d/charon"
-SS_OPENSSL_VERSION="$SS_DIR/OPENSSL_VERSION"
 
 STAGE="$ROOT/build/stage"                        # .spk staging area
 DIST="$ROOT/dist"
@@ -127,20 +126,18 @@ version_field() {
 
 # load the versions the build stages recorded next to what they produced
 require_bundled_versions() {
-	[ -s "$SS_OPENSSL_VERSION" ] \
-		|| die "$SS_OPENSSL_VERSION not found. Rebuild strongSwan on Linux with: ./build.sh --rebuild-strongswan"
 	[ -f "$SS_VERSION_FILE" ] \
 		|| die "$SS_VERSION_FILE not found. Rebuild strongSwan on Linux with: ./build.sh --rebuild-strongswan"
 	[ -f "$IPSET_VERSION_FILE" ] \
 		|| die "$IPSET_VERSION_FILE not found. Rebuild ipset on Linux with: ./build.sh --rebuild-ipset"
 
-	BUNDLED_STRONGSWAN_VERSION="$(sed -n '1p' "$SS_VERSION_FILE")"
-	BUNDLED_OPENSSL_VERSION="$(sed -n '1p' "$SS_OPENSSL_VERSION")"
+	BUNDLED_STRONGSWAN_VERSION="$(version_field "$SS_VERSION_FILE" strongswan)"
+	BUNDLED_OPENSSL_VERSION="$(version_field "$SS_VERSION_FILE" openssl)"
 	BUNDLED_IPSET_VERSION="$(version_field "$IPSET_VERSION_FILE" ipset)"
 	BUNDLED_LIBMNL_VERSION="$(version_field "$IPSET_VERSION_FILE" libmnl)"
 
-	[ -n "$BUNDLED_STRONGSWAN_VERSION" ] || die "$SS_VERSION_FILE is empty"
-	[ -n "$BUNDLED_OPENSSL_VERSION" ] || die "$SS_OPENSSL_VERSION is empty"
+	[ -n "$BUNDLED_STRONGSWAN_VERSION" ] || die "strongswan= is missing from $SS_VERSION_FILE"
+	[ -n "$BUNDLED_OPENSSL_VERSION" ] || die "openssl= is missing from $SS_VERSION_FILE"
 	[ -n "$BUNDLED_IPSET_VERSION" ] || die "ipset= is missing from $IPSET_VERSION_FILE"
 	[ -n "$BUNDLED_LIBMNL_VERSION" ] || die "libmnl= is missing from $IPSET_VERSION_FILE"
 }
@@ -148,7 +145,7 @@ require_bundled_versions() {
 # true when the minimal runtime files are already present under src/
 have_strongswan() {
 	[ -f "$SS_CHARON" ] && [ -f "$SS_SWANCTL" ] \
-		&& [ -s "$SS_OPENSSL_VERSION" ] \
+		&& [ -s "$SS_VERSION_FILE" ] \
 		&& [ -f "$ROOT/licenses/openssl-LICENSE.txt" ] \
 		&& ls "$SS_CONFDIR"/*.conf >/dev/null 2>&1
 }
@@ -351,11 +348,14 @@ build_strongswan() {
 	cp -p "$_charon" "$SS_CHARON"
 	cp -p "$_swanctl" "$SS_SWANCTL"
 	cp -p "$_confdir"/*.conf "$SS_CONFDIR/"
-	printf '%s\n' "$OPENSSL_VERSION" > "$SS_OPENSSL_VERSION"
 
-	# charon carries no version marker that survives stripping, so the
-	# version the source tarball named is recorded next to the binaries
-	printf '%s\n' "$_ver" > "$SS_VERSION_FILE"
+	# charon carries no version marker that survives stripping, and OpenSSL
+	# is linked in statically, so both versions are recorded next to the
+	# binaries they went into
+	{
+		printf 'strongswan=%s\n' "$_ver"
+		printf 'openssl=%s\n' "$OPENSSL_VERSION"
+	} > "$SS_VERSION_FILE"
 
 	# keep the bundled strongSwan license notice in sync with the built version
 	if [ -f "$_srcdir/LICENSE" ]; then
