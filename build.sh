@@ -93,7 +93,14 @@ SS_SYSCONFDIR=/var/packages/IKEv2VPN/etc
 SS_SWANCTLDIR=/var/packages/IKEv2VPN/etc/swanctl
 SS_PIDDIR=/var/packages/IKEv2VPN/var
 SS_STAGE="$ROOT/build/strongswan-stage"          # DESTDIR for 'make install'
-OPENSSL_PREFIX="$ROOT/build/openssl-install"      # private static libcrypto
+
+# OpenSSL source-build layout. The prefix and openssldir are compiled into
+# libcrypto, so they name the package's own runtime paths rather than the
+# build directory, and the tree is installed under a DESTDIR staging root.
+OPENSSL_PREFIX=/var/packages/IKEv2VPN/target/strongswan
+OPENSSL_SSLDIR=/var/packages/IKEv2VPN/etc/ssl
+OPENSSL_STAGE="$ROOT/build/openssl-stage"        # DESTDIR for 'make install_sw'
+OPENSSL_INSTALL="$OPENSSL_STAGE$OPENSSL_PREFIX"  # private static libcrypto
 
 IPSET_DIR="$SRC/package/ipset"                   # bundled ipset (SPK source of truth)
 IPSET_BIN="$IPSET_DIR/ipset"
@@ -152,7 +159,7 @@ have_ipset() {
 # remove only artifacts created while obtaining/building bundled strongSwan
 clean_strongswan() {
 	log "Removing downloaded and built strongSwan artifacts"
-	rm -rf "$SS_DIR" "$SS_STAGE" "$OPENSSL_PREFIX" \
+	rm -rf "$SS_DIR" "$SS_STAGE" "$OPENSSL_STAGE" \
 		"$ROOT/build/strongswan-src.tar.bz2" "$ROOT/build/openssl-src.tar.gz"
 	if [ -d "$ROOT/build" ]; then
 		find "$ROOT/build" -mindepth 1 -maxdepth 1 -type d \
@@ -202,7 +209,7 @@ build_openssl() {
 	_openssl_src="$ROOT/build/$_openssl_dir"
 
 	log "Extracting OpenSSL ($_openssl_dir)"
-	rm -rf "$_openssl_src" "$OPENSSL_PREFIX"
+	rm -rf "$_openssl_src" "$OPENSSL_STAGE"
 	tar xzf "$_openssl_dl" -C "$ROOT/build"
 	rm -f "$_openssl_dl"
 
@@ -212,16 +219,17 @@ build_openssl() {
 		cd "$_openssl_src"
 		CFLAGS="$OPENSSL_CFLAGS" ./Configure linux-x86_64 \
 			--prefix="$OPENSSL_PREFIX" \
+			--openssldir="$OPENSSL_SSLDIR" \
 			--libdir=lib \
-			no-shared no-module no-apps no-tests no-docs
+			no-shared no-module no-dso no-apps no-tests no-docs
 		make -j1
-		make install_sw -j1
+		make install_sw -j1 DESTDIR="$OPENSSL_STAGE"
 	)
 
-	[ -f "$OPENSSL_PREFIX/lib/libcrypto.a" ] \
-		|| die "OpenSSL did not produce $OPENSSL_PREFIX/lib/libcrypto.a"
-	if find "$OPENSSL_PREFIX" -name '*.so*' | grep -q .; then
-		find "$OPENSSL_PREFIX" -name '*.so*' >&2
+	[ -f "$OPENSSL_INSTALL/lib/libcrypto.a" ] \
+		|| die "OpenSSL did not produce $OPENSSL_INSTALL/lib/libcrypto.a"
+	if find "$OPENSSL_STAGE" -name '*.so*' | grep -q .; then
+		find "$OPENSSL_STAGE" -name '*.so*' >&2
 		die "OpenSSL produced shared libraries despite no-shared."
 	fi
 	if [ -f "$_openssl_src/LICENSE.txt" ]; then
@@ -278,9 +286,9 @@ build_strongswan() {
 	(
 		cd "$_srcdir"
 		make distclean >/dev/null 2>&1 || true
-		CPPFLAGS="-I$OPENSSL_PREFIX/include ${CPPFLAGS:-}" \
+		CPPFLAGS="-I$OPENSSL_INSTALL/include ${CPPFLAGS:-}" \
 		CFLAGS="$SS_CFLAGS" \
-		LDFLAGS="-L$OPENSSL_PREFIX/lib ${LDFLAGS:-}" \
+		LDFLAGS="-L$OPENSSL_INSTALL/lib ${LDFLAGS:-}" \
 		LIBS="-ldl -pthread ${LIBS:-}" \
 		./configure \
 			--prefix="$SS_PREFIX" \
@@ -327,6 +335,9 @@ build_strongswan() {
 		if ldd "$_b" | grep -qi "not found"; then
 			ldd "$_b" >&2
 			die "$_b has unresolved shared libraries."
+		fi
+		if LC_ALL=C grep -qaF "$ROOT" "$_b"; then
+			die "$_b embeds the build directory path."
 		fi
 	done
 	[ -f "$_confdir/openssl.conf" ] || die "The strongSwan OpenSSL plugin config was not installed."
