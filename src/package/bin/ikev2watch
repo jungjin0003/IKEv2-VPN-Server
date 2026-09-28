@@ -359,8 +359,8 @@ scan_ike_log() {
         return cn
     }
     BEGIN {
-        # restore the id->ip map and the ids already counted as a failure,
-        # both learned in previous passes
+        # restore the id->ip map, the ids already counted as a failure and
+        # the ids a rekey replaced, all learned in previous passes
         while ((getline line < astate) > 0) {
             n = split(line, a, "\t")
             if (n >= 2 && a[1] != "") addr[a[1]] = a[2]
@@ -388,6 +388,9 @@ scan_ike_log() {
 
         # learn/refresh this IKE_SA id peer IP from whatever form is present:
         #  (a) "x.x.x.x[port]"      - on received-packet / IKE_SA_INIT lines
+        #      A "sending packet:" line names the server first and is
+        #      skipped. The response sent after an IKE_SA is deleted would
+        #      otherwise put the entry back.
         if ($0 !~ /sending packet:/ && match($0, /[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+\[[0-9]+\]/)) {
             s = substr($0, RSTART, RLENGTH); sub(/\[.*/, "", s)
             if (s != "127.0.0.1") addr[id] = s
@@ -435,6 +438,10 @@ scan_ike_log() {
         } else if ($0 ~ /IKE_SA .* established/) {
             if (ip != "" && !(id in est)) { est[id] = 1; printf "%s|%s|-|established|%s\n", now, connname(cn), ip >> ev }
         } else if (match($0, /IKE_SA [^ ]+\[[0-9]+\] rekeyed between/)) {
+            # An IKE rekey moves the connection onto a new IKE_SA id, named
+            # in this line, and the old id is deleted right after. The client
+            # is still connected, so the new id takes over the address and
+            # the deletion of the old one is not reported as a disconnect.
             nid = substr($0, RSTART, RLENGTH); sub(/^IKE_SA [^ ]*\[/, "", nid); sub(/\].*/, "", nid)
             nid = cn "|" nid
             if (nid != id) {
@@ -442,6 +449,9 @@ scan_ike_log() {
                 rekeyed[id] = 1
             }
         } else if ($0 ~ /IKE_SA deleted/) {
+            # charon writes this once a DELETE exchange for the IKE_SA has
+            # completed, whichever side started it, and names neither the SA
+            # nor the peer: the id comes from the line prefix.
             if (ip != "" && !(id in rekeyed)) printf "%s|%s|-|disconnected|%s\n", now, connname(cn), ip >> ev
             # SA gone - stop tracking so the map stays bounded, and let the
             # next attempt from this address be counted on its own
