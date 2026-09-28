@@ -67,7 +67,7 @@ required notices:
 
 ## 2. GNU MP (GMP) — dynamically linked, NOT bundled
 
-- **License:** dual GNU LGPL-2.1-or-later / GNU GPL-2.0-or-later.
+- **License:** dual GNU LGPL-3.0-or-later / GNU GPL-2.0-or-later.
 - **Usage:** the bundled `charon`/`swanctl` binaries link **dynamically** at
   runtime against the target system's own `libgmp.so` (provided by DSM). GMP
   itself is **not included in or distributed by** this package.
