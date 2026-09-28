@@ -36,6 +36,10 @@
 #   ./build.sh --rebuild-strongswan  # force a fresh strongSwan build from source
 #   ./build.sh --rebuild-ipset       # force a fresh ipset build from source
 #   ./build.sh --strongswan-version 6.0.7   # pin the strongSwan source version
+#   ./build.sh --openssl-version 3.5.4      # pin the OpenSSL source version
+#                                           #   (a series such as 3.5, the
+#                                           #    default, takes its newest
+#                                           #    release)
 #   ./build.sh --ipset-version 7.22         # pin the ipset source version
 #   ./build.sh clean                 # remove everything downloaded and built
 #   ./build.sh --clean               # same as clean
@@ -50,7 +54,7 @@ cd "$ROOT"
 # ---------------------------------------------------------------- arguments
 SS_VERSION="latest"
 # Resolved from the latest OpenSSL GitHub release when rebuilding.
-OPENSSL_VERSION="latest"
+OPENSSL_VERSION="3.5"
 IPSET_VERSION="6.38"
 SPK_ONLY=false
 REBUILD_SS=false
@@ -61,6 +65,8 @@ while [ $# -gt 0 ]; do
 	case "$1" in
 	--strongswan-version) SS_VERSION="$2"; shift 2 ;;
 	--strongswan-version=*) SS_VERSION="${1#*=}"; shift ;;
+	--openssl-version) OPENSSL_VERSION="$2"; shift 2 ;;
+	--openssl-version=*) OPENSSL_VERSION="${1#*=}"; shift ;;
 	--ipset-version) IPSET_VERSION="$2"; shift 2 ;;
 	--ipset-version=*) IPSET_VERSION="${1#*=}"; shift ;;
 	--spk-only) SPK_ONLY=true; shift ;;
@@ -176,14 +182,24 @@ clean_ipset() {
 # --------------------------------------------------- stage 1: strongSwan
 # Resolve the current stable OpenSSL release from the upstream release API.
 resolve_openssl_version() {
-	require_tool curl
-	[ "$OPENSSL_VERSION" != "latest" ] && return 0
-	_openssl_release="$(curl -fsSL --retry 3 https://api.github.com/repos/openssl/openssl/releases/latest)"
-	OPENSSL_VERSION="$(printf '%s\n' "$_openssl_release" \
-		| sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"openssl-\([^"]*\)".*/\1/p' \
-		| sed -n '1p')"
+	_openssl_series=""
+	case "$OPENSSL_VERSION" in
+	*.*.*) return 0 ;;
+	*[!0-9.]*) ;;
+	[0-9]*.[0-9]*) _openssl_series="$OPENSSL_VERSION" ;;
+	esac
+	[ -n "$_openssl_series" ] \
+		|| die "Not an OpenSSL release series (3.5) or release (3.5.4): $OPENSSL_VERSION"
+	require_tool git
+
+	_openssl_series_re="${_openssl_series//./\\.}"
+	OPENSSL_VERSION="$(git ls-remote --tags --refs https://github.com/openssl/openssl \
+			"openssl-${_openssl_series}.*" \
+		| sed -n "s|.*refs/tags/openssl-\(${_openssl_series_re}\.[0-9][0-9]*\)\$|\1|p" \
+		| sort -t. -k3,3n | tail -n 1)" \
+		|| die "Could not list the OpenSSL release tags on GitHub."
 	[ -n "$OPENSSL_VERSION" ] \
-		|| die "Could not determine the latest OpenSSL release from GitHub."
+		|| die "Could not find an OpenSSL ${_openssl_series}.x release on GitHub."
 }
 build_openssl() {
 	resolve_openssl_version
