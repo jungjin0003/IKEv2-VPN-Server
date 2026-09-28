@@ -386,7 +386,7 @@ scan_ike_log() {
 
         # learn/refresh this IKE_SA id peer IP from whatever form is present:
         #  (a) "x.x.x.x[port]"      - on received-packet / IKE_SA_INIT lines
-        if (match($0, /[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+\[[0-9]+\]/)) {
+        if ($0 !~ /sending packet:/ && match($0, /[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+\[[0-9]+\]/)) {
             s = substr($0, RSTART, RLENGTH); sub(/\[.*/, "", s)
             if (s != "127.0.0.1") addr[id] = s
         }
