@@ -53,7 +53,8 @@ cd "$ROOT"
 
 # ---------------------------------------------------------------- arguments
 SS_VERSION="latest"
-# Resolved from the latest OpenSSL GitHub release when rebuilding.
+# A release series (the 3.5 LTS line) resolves to its newest release when
+# rebuilding. An exact X.Y.Z release is used as given.
 OPENSSL_VERSION="3.5"
 IPSET_VERSION="6.38"
 SPK_ONLY=false
@@ -180,7 +181,9 @@ clean_ipset() {
 	fi
 }
 # --------------------------------------------------- stage 1: strongSwan
-# Resolve the current stable OpenSSL release from the upstream release API.
+# Resolve an OpenSSL release series to its newest final release. The upstream
+# tags are read with git ls-remote, which has no page limit or API rate limit,
+# and alpha, beta and pre-release tags are filtered out by the sed pattern.
 resolve_openssl_version() {
 	_openssl_series=""
 	case "$OPENSSL_VERSION" in
